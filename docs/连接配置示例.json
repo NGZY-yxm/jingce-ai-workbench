@@ -1,0 +1,24 @@
+{
+  "说明": "仅供查阅。所有密钥为空，工作台不会自动加载此文件；请通过界面填写自己的连接。",
+  "video": {
+    "platform": "北北海视频 API",
+    "baseUrl": "https://direct.beibeihai.xyz",
+    "docsUrl": "https://direct.beibeihai.xyz",
+    "videoModel": "seedance-2.0-933-720P（秒）",
+    "apiKey": ""
+  },
+  "image": {
+    "platform": "beibeihai 图片 API",
+    "baseUrl": "https://sub.beibeihai.xyz",
+    "docsUrl": "https://sub.beibeihai.xyz/pricing",
+    "imageModel": "gpt-image-2.5-flare",
+    "apiKey": ""
+  },
+  "text": {
+    "platform": "北北海文本模型 API",
+    "baseUrl": "https://sub.beibeihai.xyz/v1",
+    "docsUrl": "https://sub.beibeihai.xyz/pricing",
+    "textModel": "",
+    "apiKey": ""
+  }
+}
