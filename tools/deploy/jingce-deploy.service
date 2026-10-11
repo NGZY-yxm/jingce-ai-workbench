@@ -1,0 +1,11 @@
+[Unit]
+Description=Update Jingce from GitHub main after successful tests
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/jingce-auto-deploy
+TimeoutStartSec=360
+User=root
+UMask=0077
