@@ -10,7 +10,7 @@ git config user.name test
 git config user.email test@example.invalid
 mkdir -p tools/deploy
 cp "$source_script" tools/deploy/update-server.sh
-printf '%s\n' '{"scripts":{"test":"node -e process.exit(0)"}}' > package.json
+printf '%s\n' '{"scripts":{"test":"node -e \"process.exit(0)\""}}' > package.json
 printf 'initial\n' > version.txt
 git add .
 git commit -qm initial
@@ -61,14 +61,14 @@ good=$(git rev-parse HEAD)
 [[ "$(cat "$tmp/app/version.txt")" == 'new version' ]]
 echo 'PASS: successful tests deploy exact remote commit'
 
-printf '%s\n' '{"scripts":{"test":"node -e process.exit(1)"}}' > package.json
+printf '%s\n' '{"scripts":{"test":"node -e \"process.exit(1)\""}}' > package.json
 git add . && git commit -qm bad-tests && git push -q origin main
 if run_update; then echo 'Expected failed tests to stop deployment'; exit 1; fi
 [[ "$(git -C "$tmp/app" rev-parse HEAD)" == "$good" ]]
 [[ "$(cat "$tmp/state/rejected-commit")" == "$(git rev-parse HEAD)" ]]
 echo 'PASS: failed tests retain production and reject commit'
 
-printf '%s\n' '{"scripts":{"test":"node -e process.exit(0)"}}' > package.json
+printf '%s\n' '{"scripts":{"test":"node -e \"process.exit(0)\""}}' > package.json
 git add . && git commit -qm fixed-tests && git push -q origin main
 export FAIL_HEALTH=1
 if run_update; then echo 'Expected failed health check to roll back'; exit 1; fi
