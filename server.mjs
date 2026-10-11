@@ -327,7 +327,8 @@ export async function createStudio(options = {}) {
       if (route === '/api/settings' && method === 'PUT') {
         const input = await requestJson(request); const previous = await store.settings();
         if (input.baseUrl) videoBaseUrl(input.baseUrl);
-        const next = { ...DEFAULT_CONNECTION, ...previous, baseUrl: PLATFORM, docsUrl: DEFAULT_CONNECTION.docsUrl,
+        const next = { ...DEFAULT_CONNECTION, ...previous,
+          baseUrl: videoBaseUrl(input.baseUrl || previous.baseUrl || PLATFORM), docsUrl: DEFAULT_CONNECTION.docsUrl,
           videoModel: String(input.videoModel || previous.videoModel || DEFAULT_CONNECTION.videoModel).slice(0, 120),
           resolution: String(input.resolution || previous.resolution || '720p'),
           apiKey: input.clearKey ? '' : typeof input.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim().slice(0, 1024) : previous.apiKey || '' };

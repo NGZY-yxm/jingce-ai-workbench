@@ -19,7 +19,7 @@
 
 | 功能 | 服务商网站 / 说明 | 镜策使用的 Base URL | 配置入口 |
 | --- | --- | --- | --- |
-| 新版视频 | [北北海视频平台](https://direct.beibeihai.xyz) | `https://direct.beibeihai.xyz` | 左侧“视频模型连接” |
+| 新版视频 | [北北海视频平台](https://sub.beibeihai.xyz) / [直连入口](https://direct.beibeihai.xyz) | 默认 `https://sub.beibeihai.xyz`，可选 `https://direct.beibeihai.xyz` | 左侧“视频模型连接” |
 | 图片 | [北北海平台](https://sub.beibeihai.xyz) · [价格与接口说明](https://sub.beibeihai.xyz/pricing) | `https://sub.beibeihai.xyz` | 左侧“生图连接” |
 | 文本 / 语言模型 | [北北海平台](https://sub.beibeihai.xyz) · [价格与接口说明](https://sub.beibeihai.xyz/pricing) | `https://sub.beibeihai.xyz/v1` | 左侧“语言模型” |
 

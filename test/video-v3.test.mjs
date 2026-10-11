@@ -99,6 +99,31 @@ test('新版请求为一次 JSON POST，含完整模型名和显式参数，正�
   for (const base of ['https://other.invalid', PLATFORM + '/api/v3/api/v3', 'http://direct.beibeihai.xyz']) assert.throws(() => videoBaseUrl(base));
 });
 
+test('直连视频端点仍可选，并用于模型查询、创建和查询任务', async () => {
+  const direct = 'https://direct.beibeihai.xyz';
+  const calls = [];
+  const directSettings = { ...settings, baseUrl: direct };
+  const catalogResult = await loadCatalog(directSettings, async (url, options) => {
+    calls.push({ url, method: options.method });
+    return reply({ data: [{ id: ids[0] }] });
+  });
+  assert.equal(catalogResult[0].name, ids[0]);
+  await submitVideo(directSettings, job, undefined, async (url, options) => {
+    calls.push({ url, method: options.method, requestId: options.headers['X-Request-Id'] });
+    return reply({ id: 'direct-task', status: 'queued' });
+  });
+  await pollVideo(directSettings, 'direct-task', async (url, options) => {
+    calls.push({ url, method: options.method });
+    return reply({ id: 'direct-task', status: 'completed', content: { video_url: 'https://media.example.org/direct.mp4' } });
+  });
+  assert.deepEqual(calls.map(call => [call.method || 'GET', call.url]), [
+    ['GET', direct + '/v1/models'],
+    ['POST', direct + '/api/v3/contents/generations/tasks'],
+    ['GET', direct + '/api/v3/contents/generations/tasks/direct-task'],
+  ]);
+  assert.match(calls[1].requestId, /^[0-9a-f-]{36}$/);
+});
+
 test('整数秒数、分辨率、比例、文本及完整模型名不合法时在发送前拒绝', async () => {
   let calls = 0;
   const fetcher = async () => { calls++; return reply({ id: 'unexpected', status: 'queued' }); };
@@ -145,6 +170,8 @@ test('成功严格读取 content.video_url；progress=100、旧结果字段和�
   assert.equal(normalizeVideoV3Task({ status: 'running', progress: 100 }).state, 'running');
   const success = normalizeVideoV3Task({ id: 'task', status: 'succeeded', content: { video_url: 'https://media.example.org/result.mp4' } });
   assert.equal(success.state, 'completed'); assert.equal(success.url, 'https://media.example.org/result.mp4');
+  const completed = normalizeVideoV3Task({ task_id: 'task-2', status: 'completed', content: { video_url: 'https://media.example.org/result-2.mp4' } });
+  assert.equal(completed.state, 'completed'); assert.equal(completed.taskId, 'task-2');
   for (const data of [
     { status: 'succeeded', result_urls: ['https://media.example.org/result.mp4'] },
     { status: 'succeeded', content: { video_url: 'https://127.0.0.1/result.mp4' } },
@@ -221,14 +248,14 @@ test('更换默认密钥和重启后 GET 仍使用创建时的密钥与地址，
   await ctx.store.saveSettings({ ...settings, apiKey: 'new-default-key' });
   await ctx.jobs.tick(); await ctx.restart(); assert.equal(calls.length, 1);
   await ctx.jobs.retryLookup(first.id); await until(() => calls.length === 2 && !ctx.jobs.busy.size);
-  assert.equal(calls[1].auth, 'Bearer ' + settings.apiKey); assert.match(calls[1].url, /^https:\/\/direct\.beibeihai\.xyz\/api\/v3\//);
+  assert.equal(calls[1].auth, 'Bearer ' + settings.apiKey); assert.match(calls[1].url, /^https:\/\/sub\.beibeihai\.xyz\/api\/v3\//);
   assert.equal(calls.filter(item => item.method === 'POST').length, 1);
   const stateText = await readFile(path.join(ctx.root, 'projects.json'), 'utf8');
   assert.doesNotMatch(stateText, /v3-original-test-secret|new-default-key/);
   assert.equal((await ctx.store.videoTaskSettings(ctx.store.state.jobs[0])).apiKey, settings.apiKey);
 });
 
-test('旧服务迁移保留历史任务的原密钥与旧端点，新默认连接切换到 direct', async t => {
+test('旧服务迁移保留历史任务的原密钥与旧端点，新默认连接使用文档 sub 端点', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'jingce-video-migration-')), store = new Store(root);
   t.after(() => rm(root, { recursive: true, force: true }));
   await store.init(); await store.saveSettings({ ...LEGACY_CONNECTION, apiKey: 'legacy-original-key' });

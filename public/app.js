@@ -1249,6 +1249,8 @@ $('#storage-test').onclick = () => action($('#storage-test'), async () => {
 });
 
 function renderSettings() {
+  const videoBase = $('#settings-form [name=baseUrl]');
+  if (videoBase) videoBase.value = state.settings.baseUrl || 'https://sub.beibeihai.xyz';
   $('#key-state').textContent = state.settings.hasKey ? '已保存密钥。此处不回显，留空可保留原密钥。' : '尚未保存 API Key。请在平台官网创建令牌后在此填写。';
   $('#settings-form [name=apiKey]').value = ''; $('#connection-message').textContent = state.catalogError || state.settings.message || '';
   $('#connection-message').classList.toggle('error', Boolean(state.catalogError));
@@ -1480,7 +1482,7 @@ $('#close-settings').onclick = () => $('#settings-dialog').close();
 $('#close-image-settings').onclick = () => $('#image-settings-dialog').close();
 async function saveSettings() {
   const form = $('#settings-form');
-  state.settings = await api('/api/settings', 'PUT', { apiKey: form.elements.apiKey.value });
+  state.settings = await api('/api/settings', 'PUT', { baseUrl: form.elements.baseUrl.value, apiKey: form.elements.apiKey.value });
   form.elements.apiKey.value = ''; const latest = await api('/api/bootstrap'); state.catalog = latest.catalog; state.catalogError = latest.catalogError; renderSettingsStatus(); canvas.render();
   $('#key-state').textContent = state.settings.hasKey ? '密钥已保存在本机，页面不回显。' : '尚未保存密钥。';
 }
