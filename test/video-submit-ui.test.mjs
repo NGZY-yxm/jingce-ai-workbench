@@ -24,8 +24,9 @@ async function page(fetcher, storage = new Map()) {
     });
     return elements.get(selector);
   };
+  const document = { querySelector: element, querySelectorAll: () => [], addEventListener() {} };
   const context = vm.createContext({
-    document: { querySelector: element, querySelectorAll: () => [], addEventListener() {} }, window: { addEventListener() {} },
+    document, window: { addEventListener() {} },
     sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     setTimeout: () => 1, clearTimeout() {}, crypto: { randomUUID }, structuredClone, console,
     videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote,
@@ -35,14 +36,15 @@ async function page(fetcher, storage = new Map()) {
   });
   const script = (await readFile(new URL('../public/app.js', import.meta.url), 'utf8'))
     .replace(/^import[^\n]*\n/gm, '').replace(/\ninit\(\);\s*$/, '\n');
-  vm.runInContext(script + '\nglobalThis.harness={state,generateScene,renderScenes};', context);
+  vm.runInContext(script + '\nglobalThis.harness={state,generateScene,renderScenes,syncVideoCatalog,applyPendingVideoCatalog,saveSettings,refreshVideoCatalog};', context);
   const project = createProject(); project.id = 'video-project';
   project.scenes = [{ id: 'clip', title: '视频', videoPrompt: '原创人物行走', references: [],
     duration: 5, generationDuration: 5, generationCount: 1 }];
-  const { state, generateScene, renderScenes } = context.harness;
+  const { state, generateScene, renderScenes, syncVideoCatalog, applyPendingVideoCatalog, saveSettings, refreshVideoCatalog } = context.harness;
   state.project = project; state.saved = structuredClone(project); state.catalog = catalog;
   state.settings = { hasKey: true, videoModel: 'model-a', generationCountMax: 5, videoRequestMode: VIDEO_REQUEST_MODE };
-  return { state, generateScene, renderScenes, element };
+  element('#settings-form').elements = { baseUrl: { value: 'https://sub.beibeihai.xyz' }, apiKey: { value: '' } };
+  return { state, generateScene, renderScenes, element, document, syncVideoCatalog, applyPendingVideoCatalog, saveSettings, refreshVideoCatalog };
 }
 const recordedBatch = input => ({ batchId: input.operationId, count: input.count,
   jobs: [{ id: input.operationId, batchId: input.operationId, sceneId: input.sceneId, operationId: input.operationId,
@@ -132,4 +134,97 @@ test('画布和视频页同时触发同一视频生成项时，仅发送一个�
     await assert.rejects(current.generateScene('clip'), /正在提交/);
     assert.equal(posts, 1);
   } finally { release(); await first; }
+});
+
+test('新视频生成始终提交用户看到的报价快照，未知费用也不会省略', async () => {
+  const posts = [];
+  const current = await page(async (_url, options) => {
+    const input = JSON.parse(options.body); posts.push(input);
+    return response(recordedBatch(input), 202);
+  });
+  await current.generateScene('clip');
+  assert.deepEqual(posts[0].quote, { price: 1, currency: '' });
+  current.state.catalog = [{ ...catalog[0], pricingAvailable: false,
+    tiers: catalog[0].tiers.map(tier => ({ ...tier, price: null })) }];
+  await current.generateScene('clip');
+  assert.deepEqual(posts[1].quote, { price: null, currency: '' });
+});
+
+test('未收到确认的原操作重试保留原报价，即使刷新后模型报价改变', async () => {
+  const storage = new Map(), posts = [];
+  let loseResponse = true;
+  const fetcher = async (_url, options) => {
+    if (options.method === 'GET') return response([]);
+    const input = JSON.parse(options.body); posts.push(input);
+    if (loseResponse) { loseResponse = false; throw new Error('request lost'); }
+    return response(recordedBatch(input), 202);
+  };
+  const first = await page(fetcher, storage);
+  await assert.rejects(first.generateScene('clip'), /先核对原任务/);
+  const reloaded = await page(fetcher, storage);
+  reloaded.state.catalog = [{ ...catalog[0], pricingCurrency: 'CNY',
+    tiers: catalog[0].tiers.map(tier => ({ ...tier, price: 20 })) }];
+  await reloaded.generateScene('clip');
+  assert.deepEqual(posts[1].quote, posts[0].quote);
+  assert.equal(posts[1].operationId, posts[0].operationId);
+});
+
+test('保存新连接后晚到的自动目录响应不会恢复旧密钥目录', async () => {
+  let release, entered, gets = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const requesting = new Promise(resolve => { entered = resolve; });
+  const nextCatalog = [{ ...catalog[0], name: 'new-key-model' }];
+  const latest = { catalog: nextCatalog, catalogError: '', catalogSyncedAt: '2026-10-12T02:00:00.000Z' };
+  const current = await page(async (url, options) => {
+    if (url === '/api/settings') return response({ hasKey: true, videoModel: 'new-key-model' });
+    assert.equal(url, '/api/models'); assert.equal(options.method, 'GET');
+    if (++gets === 1) { entered(); return pending; }
+    return response(latest);
+  });
+  const automatic = current.syncVideoCatalog();
+  await requesting;
+  await current.saveSettings();
+  assert.equal(current.state.catalog[0].name, 'new-key-model');
+  release(response({ catalog, catalogError: '', catalogSyncedAt: '2026-10-12T01:00:00.000Z' }));
+  await automatic; current.applyPendingVideoCatalog();
+  assert.equal(current.state.catalog[0].name, 'new-key-model');
+  assert.equal(current.state.catalogSyncedAt, latest.catalogSyncedAt);
+});
+
+test('手动刷新后的报价和同步时间不会被较早自动请求覆盖', async () => {
+  let release, entered, gets = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const requesting = new Promise(resolve => { entered = resolve; });
+  const nextCatalog = [{ ...catalog[0], tiers: catalog[0].tiers.map(tier => ({ ...tier, price: 9 })) }];
+  const latest = { catalog: nextCatalog, catalogError: '', catalogSyncedAt: '2026-10-12T02:00:00.000Z' };
+  const current = await page(async (url, options) => {
+    if (url === '/api/models/refresh') { assert.equal(options.method, 'POST'); return response(nextCatalog); }
+    assert.equal(url, '/api/models');
+    if (++gets === 1) { entered(); return pending; }
+    return response(latest);
+  });
+  const automatic = current.syncVideoCatalog();
+  await requesting;
+  await current.refreshVideoCatalog();
+  release(response({ catalog, catalogError: '', catalogSyncedAt: '2026-10-12T01:00:00.000Z' }));
+  await automatic; current.applyPendingVideoCatalog();
+  assert.equal(current.state.catalog[0].tiers[0].price, 9);
+  assert.equal(current.state.catalogSyncedAt, latest.catalogSyncedAt);
+});
+
+test('自动目录更新等用户结束编辑后再显示，保留视频提示词和待保存修改', async () => {
+  const nextCatalog = [{ ...catalog[0], tiers: catalog[0].tiers.map(tier => ({ ...tier, price: 8 })) }];
+  const current = await page(async () => response({ catalog: nextCatalog, catalogError: '' }));
+  current.document.activeElement = { tagName: 'TEXTAREA' };
+  current.state.project.scenes[0].videoPrompt = '正在编辑的原创场景';
+  current.state.dirty.add('scenes');
+  const editor = current.element('[data-scene-field="videoPrompt"]'); editor.value = '正在编辑的原创场景';
+  await current.syncVideoCatalog();
+  assert.equal(current.state.catalog[0].tiers[0].price, 1);
+  assert.equal(editor.value, '正在编辑的原创场景');
+  current.document.activeElement = null;
+  current.applyPendingVideoCatalog();
+  assert.equal(current.state.catalog[0].tiers[0].price, 8);
+  assert.equal(current.state.project.scenes[0].videoPrompt, '正在编辑的原创场景');
+  assert.equal(current.state.dirty.has('scenes'), true);
 });

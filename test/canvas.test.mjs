@@ -265,6 +265,28 @@ test('框选创建分组、整体拖动、重命名与解散都保留内容并�
   assert.deepEqual(h.generated,[]);
 });
 
+test('独立框选工具用左键从卡片开始选择并创建分组，不移动卡片', async t => {
+  const h = canvasHarness(t, {id:'left-marquee', scenes:[], assets:[], graph:graph([
+    node('first','text',{x:120,y:120}), node('second','text',{x:520,y:120}), node('third','text',{x:1000,y:120}),
+  ])});
+  const button = h.makeElement('button'); button.dataset.canvasTool = 'marquee';
+  h.element('#canvas-viewport').append(button);
+  await h.dispatch(button,'click');
+  const before = structuredClone(h.project.graph.nodes);
+  await h.dispatch(h.cardFor('first'),'pointerdown',{button:0,pointerId:75,clientX:140,clientY:140});
+  await h.dispatch(h.element('#canvas-viewport'),'pointermove',{button:0,pointerId:75,clientX:900,clientY:450});
+  await h.dispatch(h.element('#canvas-viewport'),'pointerup',{button:0,pointerId:75,clientX:900,clientY:450});
+  h.element('#create-canvas-group').onclick();
+  assert.deepEqual(h.project.graph.groups[0].nodeIds,['first','second']);
+  assert.deepEqual(h.project.graph.nodes,before);
+  h.element('#create-canvas-group').onclick();
+  assert.equal(h.project.graph.groups.length,2);
+  assert.deepEqual(h.project.graph.groups[1].nodeIds,['first','second']);
+  assert.doesNotThrow(() => validateGraph(h.project.graph));
+  const frames = h.element('#canvas-groups').children;
+  assert.notEqual(frames[0].style['--group-header-offset'],frames[1].style['--group-header-offset']);
+});
+
 test('分组复制保持成员关系，删除单个成员后清理不足两张的分组并可恢复', async t => {
   const h=canvasHarness(t,{id:'copy-group',scenes:[],assets:[],graph:{...graph([node('a'),node('b')]),groups:[{id:'group-a',label:'参考',nodeIds:['a','b']}]}});
   await h.keyboard('a');await h.keyboard('d');
@@ -277,6 +299,17 @@ test('分组复制保持成员关系，删除单个成员后清理不足两张�
   h.element('#remove-selection').onclick();assert.ok(!h.project.graph.groups.some(group=>group.id==='group-a'));
   assert.ok(h.project.graph.nodes.some(node=>node.id==='b'));
   h.element('#undo-canvas').onclick();assert.ok(h.project.graph.groups.some(group=>group.id==='group-a'));
+});
+
+test('Esc 收起展开画布并恢复按钮焦点', async t => {
+  const h = canvasHarness(t);
+  h.canvas.setExpanded(true);
+  await h.keyboard('Escape');
+  assert.equal(h.element('#creative-canvas').classList.contains('canvas-expanded'), false);
+  assert.equal(h.element('#expand-canvas').getAttribute('aria-pressed'), 'false');
+  assert.equal(h.element('#canvas-text-panel').hidden, true);
+  assert.equal(h.docked.at(-1), false);
+  assert.equal(h.document.activeElement, h.element('#expand-canvas'));
 });
 
 test('全屏侧栏拖动与键盘调宽记忆宽度并限制范围，取消拖动恢复起始值', async t => {
@@ -330,10 +363,6 @@ test('新增视频只放入指定新生成项，已移除的完成卡片刷新�
   assert.equal(h.project.graph.nodes.length,1);
   h.canvas.reset(); h.canvas.render();
   assert.deepEqual(h.project.graph.nodes.map(card=>card.sceneId),[scene.id]);
-  h.element('#sync-scenes').onclick();
-  assert.deepEqual(h.project.graph.nodes.map(card=>card.sceneId).sort(),['cover-scene',scene.id].sort());
-  h.element('#sync-scenes').onclick();
-  assert.equal(h.project.graph.nodes.length,2);
   assert.deepEqual(h.project.assets,assets); assert.deepEqual(h.state.jobs,jobs);
   assert.deepEqual(h.generated,[]);
 });
@@ -348,6 +377,9 @@ test('右键拖拽空白区域可以框选多个卡片，完成后不弹出右�
 
   await pointer('pointerdown',50,50);
   assert.equal(viewport.hasPointerCapture(41),true);
+  const earlyMenu = await h.dispatch(viewport,'contextmenu',{button:2,pointerId:41,clientX:50,clientY:50});
+  assert.equal(earlyMenu.defaultPrevented,true);
+  assert.equal(menu.hidden,true,'按下右键时不能弹出菜单干扰框选');
   await pointer('pointermove',900,450);
   assert.equal(h.cardFor('inside-a').classList.contains('selected'),true);
   assert.equal(h.cardFor('inside-b').classList.contains('selected'),true);
@@ -358,6 +390,8 @@ test('右键拖拽空白区域可以框选多个卡片，完成后不弹出右�
   assert.equal(viewport.hasPointerCapture(41),false);
   assert.equal(marquee.hidden,true);
   assert.equal(menu.hidden,true);
+  h.element('#create-canvas-group').onclick();
+  assert.deepEqual(h.project.graph.groups[0].nodeIds,['inside-a','inside-b']);
 
   await h.dispatch(viewport,'pointerdown',{button:2,pointerId:42,pointerType:'mouse',clientX:900,clientY:450,shiftKey:false});
   await h.dispatch(viewport,'pointerup',{button:2,pointerId:42,pointerType:'mouse',clientX:900,clientY:450,shiftKey:false});
@@ -908,7 +942,7 @@ async function promptKey(h, control, key, overrides = {}) {
   await h.element('#nodes').fire('keydown',event); return event;
 }
 
-const referenceRows = card => Array.from(card.innerHTML.matchAll(/<strong>@(图片\d+|视频\d+)<\/strong><small>([^<]*)<\/small>/g),match => [match[1],match[2]]);
+const referenceRows = card => Array.from(card.innerHTML.matchAll(/title="插入 @(图片\d+|视频\d+)：([^"]*)"/g),match => [match[1],match[2]]);
 
 // Parse the actual referenceMarkup output, including actionable buttons. An
 // outerHTML update detaches the old section and installs a new DOM subtree.
@@ -952,7 +986,7 @@ function attachReferenceList(h, card) {
 }
 
 const liveReferenceRows = section => section.querySelectorAll('.shot-reference-item').map(row => [
-  row.querySelector('strong').textContent.replace(/^@/,''), row.querySelector('small').textContent]);
+  ...row.querySelector('button').getAttribute('title').match(/^插入 @([^：]+)：(.*)$/).slice(1)]);
 
 test('已生成的视频和图片可作为另一个分镜素材，并可跨分镜复用且不复制文件', async t => {
   const project = {
@@ -1653,7 +1687,7 @@ function imageReferenceFixture(model = 'gpt-image-2.5-flare') {
   ])};
 }
 const imageLineLabels = h => [...h.element('#connections').innerHTML.matchAll(/<text\b[^>]*>(图片\d+)<\/text>/g)].map(match => match[1]);
-const imageRows = card => [...card.innerHTML.matchAll(/<strong>(图片\d+)<\/strong><small>([^<]*)<\/small>/g)].map(match => [match[1],match[2]]);
+const imageRows = card => [...card.innerHTML.matchAll(/title="(图片\d+)：([^"]*)"/g)].map(match => [match[1],match[2]]);
 
 test('图片生成卡片批量候选可预览并显式选定最终素材', async t => {
   const model = 'gpt-image-2.5-flare';

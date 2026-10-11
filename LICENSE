@@ -1,21 +1,14 @@
-MIT License
+Jingce Non-Commercial License / 镜策非商业使用许可
 
 Copyright (c) 2026 Jingce Ad Studio contributors
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本许可适用于本项目原创程序代码及文档。第三方组件不受本许可重新授权，继续遵循其原有许可，详见 THIRD_PARTY_NOTICES.md 及相关组件声明。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. 允许个人学习、研究及其他非商业目的的使用、复制、修改和再分发。
+2. 禁止未经著作权人事先书面授权的商业使用，包括售卖本软件或修改版本、收费托管、收费集成、提供商业服务，以及在商业生产、经营或付费客户项目中使用本软件。
+3. 复制、修改和再分发时，必须保留本许可及著作权声明，并明确标注修改。原创代码的衍生版本须保留相同的非商业使用限制，不得移除或绕过限制。
+4. 本许可不授予商标、模型服务、素材或生成内容的额外权利；相关权利按各自授权处理。
+5. 本软件按“现状”提供，不作任何明示或默示担保。在适用法律允许的范围内，著作权人及贡献者不对使用本软件造成的损失承担责任。
+6. 违反本许可时，使用授权自动终止。商业授权须另行取得著作权人的书面许可。
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Permission is granted to use, copy, modify and redistribute the original software solely for non-commercial purposes. Commercial use, sale, paid hosting, paid integration, commercial services and use in commercial production or paid client work require prior written permission from the copyright holders. Copies and derivatives must retain this notice and the same non-commercial restrictions. Third-party components retain their own licenses. THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY; the authors disclaim liability to the extent permitted by applicable law.

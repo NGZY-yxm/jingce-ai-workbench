@@ -49,13 +49,17 @@ export function videoParameterControls(p, catalog = [], maxCount = 5, submitting
 
 export function videoEstimateText(p) {
   if (!p.tier) return '请先选择当前可见视频模型';
-  return p.totalEstimate == null ? '费用待平台确认' : `预计合计 ${p.totalEstimate} 平台余额单位`;
+  return p.totalEstimate == null ? '费用待平台确认' : p.model?.pricingCurrency === 'CNY'
+    ? `公开报价预计合计 ￥${p.totalEstimate}` : `预计合计 ${p.totalEstimate} ${p.model?.priceUnit || '平台余额单位'}`;
 }
 export function videoPricingNote(p) {
   if (!p.tier) return '请先选择有效的模型参数。';
-  return p.totalEstimate == null
-    ? `将创建 ${p.count} 个视频任务；新版文档不提供单价，请向平台确认报价，实际扣费以账单为准。`
-    : `每个 ${p.tier.price} 余额单位 × ${p.count} 个；最终扣费以平台为准。`;
+  const unit = p.model?.pricingCurrency === 'CNY' ? '元' : p.model?.priceUnit || '余额单位';
+  const billing = p.model?.billingMode === 'per_second' ? '按生成秒数计费' : p.model?.billingMode === 'per_request' ? '按次计费' : '';
+  const cost = p.totalEstimate == null ? `将创建 ${p.count} 个视频任务；费用待平台确认。`
+    : `每个 ${p.tier.price} ${unit} × ${p.count} 个${billing ? `，${billing}` : ''}。`;
+  const synced = p.model?.pricingSyncedAt ? `报价同步于 ${new Date(p.model.pricingSyncedAt).toLocaleTimeString('zh-CN')}。` : '';
+  return cost + [p.model?.pricingNote || '最终扣费以平台为准。', p.model?.specsNote, synced].filter(Boolean).join(' ');
 }
 
 export function updateVideoParameter(scene, field, value, model) {

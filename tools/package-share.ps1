@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$OutputDirectory,
     [string]$ReleaseTag = (Get-Date -Format 'yyyyMMdd')
 )
@@ -22,12 +22,10 @@ $taskCopies = @(
     @{ From = 'tools\share\install.cmd'; To = '安装镜策.cmd' },
     @{ From = 'tools\share\start.cmd'; To = '启动工作台.cmd' },
     @{ From = 'tools\share\stop.cmd'; To = '停止工作台.cmd' },
-    @{ From = '安装视频合成工具.cmd'; To = '安装视频合成工具.cmd' },
     @{ From = 'tools\share\说明.txt'; To = '说明.txt' },
     @{ From = 'tools\share\install.ps1'; To = 'tools\share\install.ps1' },
     @{ From = 'tools\share\start-studio.mjs'; To = 'tools\share\start-studio.mjs' },
-    @{ From = 'tools\share\stop-studio.mjs'; To = 'tools\share\stop-studio.mjs' },
-    @{ From = 'tools\install-ffmpeg.ps1'; To = 'tools\install-ffmpeg.ps1' }
+    @{ From = 'tools\share\stop-studio.mjs'; To = 'tools\share\stop-studio.mjs' }
 )
 foreach ($taskSourceGroup in @(@{ Directory = 'lib'; Extensions = @('.mjs') }, @{ Directory = 'public'; Extensions = @('.html', '.js', '.css') })) {
     $taskDirectory = Get-Item -LiteralPath (Join-Path $taskRoot $taskSourceGroup.Directory)

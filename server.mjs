@@ -16,6 +16,7 @@ import { loadImageCatalog, imageCatalogOrFallback, checkImageConnection, DEFAULT
 import { loadTextCatalog, checkTextConnection, chatText, DEFAULT_TEXT_CONNECTION, TEXT_PLATFORM } from './lib/text-provider.mjs';
 import { detectMedia } from './lib/media.mjs';
 import { CosStorage, publicStorageSettings } from './lib/storage.mjs';
+import { createVideoCatalogSync } from './lib/video-catalog-sync.mjs';
 import { toolStatus, compositionClips, compositionAudio, compose } from './lib/compose.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -24,11 +25,11 @@ const json = (response, body, status = 200) => {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   response.end(JSON.stringify(body));
 };
-async function requestJson(request) {
+async function requestJson(request, maxBytes = 2 * 1024 * 1024) {
   if (!String(request.headers['content-type'] || '').startsWith('application/json')) throw new InputError('请求需要使用 JSON 格式。');
   let bytes = 0; const chunks = [];
   for await (const chunk of request) {
-    bytes += chunk.length; if (bytes > 2 * 1024 * 1024) throw new InputError('请求内容超过 2 MB。', 413);
+    bytes += chunk.length; if (Number.isFinite(maxBytes) && bytes > maxBytes) throw new InputError(`请求内容超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`, 413);
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
@@ -102,25 +103,33 @@ export async function createStudio(options = {}) {
   const store = new Store(root); await store.init();
   await store.migrateVideoSettings();
   const storage = new CosStorage(root, store, options.storage || {});
-  let catalog = options.catalog || [];
-  let catalogError = '';
   let imageCatalog = options.imageCatalog || [];
   let imageCatalogError = '';
   let textCatalog = options.textCatalog || [];
   let textCatalogError = '';
   const textFetcher = options.textFetcher || fetch;
   const videoFetcher = options.videoFetcher || fetch;
-  if (!options.catalog) {
-    if (!(await store.settings()).apiKey) catalogError = '请先保存视频 API Key，再读取当前密钥的模型目录。';
-    else try { catalog = await loadCatalog(await store.settings(), videoFetcher); } catch { catalogError = '当前密钥的模型目录暂时无法读取，可在模型连接中检查密钥并刷新。'; }
-  }
+  const readTextCatalog = async () => {
+    const items = (await store.connections()).filter(item => item.kind === 'text');
+    if (!items.length) return loadTextCatalog(await store.textSettings(), textFetcher);
+    const catalogs = await Promise.all(items.map(async item => (await loadTextCatalog(item, textFetcher)).filter(model => item.models.includes(model.name))));
+    return [...new Map(catalogs.flat().map(model => [model.name, model])).values()];
+  };
+  const videoCatalogSync = createVideoCatalogSync({ readSettings: async () => { const items = (await store.connections()).filter(item => item.kind === 'video'); const settings = await store.connectionFor('video', null, await store.settings()); return { ...settings, baseUrl: settings.baseUrl, apiKey: settings.apiKey, routingVersion: items.map(item => item.id).join(',') }; },
+    load: async settings => {
+      const connections = (await store.connections()).filter(item => item.kind === 'video');
+      if (!connections.length) return loadCatalog(settings, videoFetcher);
+      const catalogs = await Promise.all(connections.map(async item => (await loadCatalog(item, videoFetcher)).filter(model => item.models.includes(model.name))));
+      return [...new Map(catalogs.flat().map(model => [model.name, model])).values()];
+    }, initialCatalog: options.catalog });
+  await videoCatalogSync.refresh();
   if (!options.imageCatalog) {
     try { imageCatalog = await loadImageCatalog(); } catch { imageCatalogError = '图片模型目录暂时无法读取，将使用已核对的默认模型；可稍后刷新。'; }
   }
   if (!options.textCatalog) {
     const textSettings = await store.textSettings();
-    if (textSettings.apiKey) {
-      try { textCatalog = await loadTextCatalog(textSettings, textFetcher); }
+    if (textSettings.apiKey || (await store.connections()).some(item => item.kind === 'text')) {
+      try { textCatalog = await readTextCatalog(); }
       catch { textCatalogError = '语言模型目录暂时无法读取，可稍后点击“刷新语言模型”。'; }
     }
   }
@@ -139,6 +148,16 @@ export async function createStudio(options = {}) {
   const token = randomBytes(32).toString('hex');
   let currentPort = 0;
   const exportBusy = new Set();
+  async function submissionCatalog(projectId, input) {
+    // A retry of the same operation must still return its saved task when the
+    // current model directory is temporarily unavailable or permissions change.
+    if (input.operationId && store.state.jobs.some(job => job.projectId === projectId && job.operationId === input.operationId)) {
+      return { catalog: videoCatalogSync.snapshot().catalog };
+    }
+    const snapshot = await videoCatalogSync.forSubmission();
+    if (snapshot.catalogError) throw new InputError(snapshot.catalogError, 502);
+    return { catalog: snapshot.catalog, settings: snapshot.settings };
+  }
   const server = http.createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'same-origin');
@@ -158,16 +177,19 @@ export async function createStudio(options = {}) {
       }
       const url = new URL(request.url, `http://127.0.0.1:${currentPort}`);
       const route = url.pathname; const method = request.method;
-      if (['/', '/index.html', '/style.css', '/app.js', '/ai-text.js', '/text-markdown.js', '/marked.js', '/video-parameters.js', '/image-parameters.js', '/canvas.js', '/canvas-geometry.js', '/canvas-layout.js', '/canvas.css', '/liblib-theme.css', '/reference-model.js', '/reference-api.js', '/prompt-mentions.js', '/prompt-editor.js'].includes(route) && ['GET', 'HEAD'].includes(method)) {
+      if (['/', '/index.html', '/style.css', '/app.js', '/lucide.js', '/ai-text.js', '/text-markdown.js', '/marked.js', '/video-parameters.js', '/image-parameters.js', '/canvas.js', '/canvas-geometry.js', '/canvas-layout.js', '/canvas-gravity.js', '/canvas.css', '/liblib-theme.css', '/reference-model.js', '/reference-api.js', '/prompt-mentions.js', '/prompt-editor.js'].includes(route) && ['GET', 'HEAD'].includes(method)) {
         const filename = path.join(directory, 'public', route === '/' ? 'index.html' : route.slice(1));
         response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
         response.writeHead(200, { 'Content-Type': contentTypes[path.extname(filename)], 'Cache-Control': 'no-cache' });
         response.end(method === 'HEAD' ? undefined : await readFile(filename)); return;
       }
       if (route === '/api/bootstrap' && method === 'GET') {
+        await videoCatalogSync.refresh();
         json(response, { appId: 'jingce-ad-studio', token, projects: store.list(), deletedProjects: store.list(true).filter(project => project.deletedAt),
-          settings: publicSettings(await store.settings(), await storage.publicSettings(), await store.imageSettings(), await store.textSettings()), catalog, catalogError, imageCatalog, imageCatalogError, textCatalog, textCatalogError, tools, kinds }); return;
+          settings: publicSettings(await store.connectionFor('video', null, await store.settings()), await storage.publicSettings(), await store.connectionFor('image', null, await store.imageSettings()), await store.connectionFor('text', null, await store.textSettings())),
+          ...videoCatalogSync.snapshot(), imageCatalog, imageCatalogError, textCatalog, textCatalogError, tools, kinds }); return;
       }
+      if (route === '/api/models' && method === 'GET') { json(response, await videoCatalogSync.refresh()); return; }
       if (route === '/api/projects' && method === 'GET') { json(response, store.list(url.searchParams.get('includeDeleted') === '1')); return; }
       if (route === '/api/projects' && method === 'POST') {
         const project = createProject(await requestJson(request));
@@ -205,13 +227,21 @@ export async function createStudio(options = {}) {
         if (action === 'jobs' && method === 'GET') {
           store.get(id); json(response, jobs.list(id, url.searchParams.get('includeDeleted') === '1')); return;
         }
-        if (action === 'jobs' && method === 'POST') { json(response, await jobs.start(id, await requestJson(request), catalog), 202); return; }
+        if (action === 'jobs' && method === 'POST') {
+          const input = await requestJson(request);
+          const submission = await submissionCatalog(id, input);
+          json(response, await jobs.start(id, input, submission.catalog, submission.settings), 202); return;
+        }
         if (action === 'image-jobs' && method === 'GET') {
           store.get(id); json(response, imageJobs.list(id, url.searchParams.get('includeDeleted') === '1')); return;
         }
         if (action === 'image-jobs' && method === 'POST') { json(response, await imageJobs.start(id, await requestJson(request), imageCatalog), 202); return; }
         if (action === 'image-batches' && method === 'POST') { json(response, await imageJobs.startBatch(id, await requestJson(request), imageCatalog), 202); return; }
-        if (action === 'batches' && method === 'POST') { json(response, await jobs.startBatch(id, await requestJson(request), catalog), 202); return; }
+        if (action === 'batches' && method === 'POST') {
+          const input = await requestJson(request);
+          const submission = await submissionCatalog(id, input);
+          json(response, await jobs.startBatch(id, input, submission.catalog, submission.settings), 202); return;
+        }
         if (action === 'compose' && method === 'POST') {
           const input = await requestJson(request); const project = store.get(id);
           if (!tools.ready) throw new InputError(tools.message);
@@ -259,17 +289,71 @@ export async function createStudio(options = {}) {
       }
       const imageRetry = /^\/api\/image-jobs\/([\w-]+)\/retry$/.exec(route);
       if (imageRetry && method === 'POST') { await requestJson(request); json(response, await imageJobs.retry(imageRetry[1])); return; }
-      const imageRecord = /^\/api\/image-jobs\/([\w-]+)(?:\/(restore))?$/.exec(route);
+      const imageRecord = /^\/api\/image-jobs\/([\w-]+)(?:\/(restore|permanent))?$/.exec(route);
       if (imageRecord && !imageRecord[2] && method === 'DELETE') { json(response, await imageJobs.setDeleted(imageRecord[1], true)); return; }
+      if (imageRecord?.[2] === 'permanent' && method === 'DELETE') { json(response, await store.permanentlyDeleteJob(imageRecord[1], 'image', id => imageJobs.busy.has(id))); return; }
       if (imageRecord?.[2] === 'restore' && method === 'POST') { await requestJson(request); json(response, await imageJobs.setDeleted(imageRecord[1], false)); return; }
             const retry = /^\/api\/jobs\/([\w-]+)\/query$/.exec(route);
       if (retry && method === 'POST') { const input = await requestJson(request); json(response, await jobs.retryLookup(retry[1], input.taskId)); return; }
-      const jobRecord = /^\/api\/jobs\/([\w-]+)(?:\/(restore))?$/.exec(route);
+      const jobRecord = /^\/api\/jobs\/([\w-]+)(?:\/(restore|permanent))?$/.exec(route);
       if (jobRecord && !jobRecord[2] && method === 'DELETE') {
         json(response, await jobs.setDeleted(jobRecord[1], true)); return;
       }
+      if (jobRecord?.[2] === 'permanent' && method === 'DELETE') { json(response, await store.permanentlyDeleteJob(jobRecord[1], 'video', id => jobs.busy.has(id) || jobs.submitting.has(id))); return; }
       if (jobRecord?.[2] === 'restore' && method === 'POST') {
         await requestJson(request); json(response, await jobs.setDeleted(jobRecord[1], false)); return;
+      }
+      if (route === '/api/connections' && method === 'GET') {
+        json(response, (await store.connections()).map(({ apiKey, ...item }) => ({ ...item, hasKey: Boolean(apiKey) }))); return;
+      }
+      const existingModelsRoute = /^\/api\/existing-connections\/(video|image|text)\/models$/.exec(route);
+      if (existingModelsRoute && method === 'GET') {
+        const kind = existingModelsRoute[1];
+        json(response, kind === 'video' ? await loadCatalog(await store.settings(), videoFetcher) : kind === 'image' ? (await checkImageConnection(await store.imageSettings(), options.imageFetcher || fetch)).models : await loadTextCatalog(await store.textSettings(), textFetcher)); return;
+      }
+      if (route === '/api/connections' && method === 'PUT') {
+        const input = await requestJson(request), items = await store.connections();
+        const previous = items.find(item => item.id === input.id), kind = input.kind;
+        if (!['video', 'image', 'text'].includes(kind)) throw new InputError('请选择接口类型。');
+        const baseUrl = kind === 'video' ? videoBaseUrl(input.baseUrl || PLATFORM) : kind === 'image' ? IMAGE_PLATFORM : TEXT_PLATFORM;
+        if (kind !== 'video' && input.baseUrl && input.baseUrl !== baseUrl) throw new InputError('该接口地址与现有适配协议不匹配。');
+        const models = [...new Set((Array.isArray(input.models) ? input.models : []).map(value => String(value).trim()).filter(Boolean))];
+        if (!models.length || models.some(value => value.length > 160) || models.length > 500) throw new InputError('请绑定至少一个模型。');
+        const id = previous?.id || randomUUID();
+        if (items.some(item => item.id !== id && item.kind === kind && item.models.some(model => models.includes(model)))) throw new InputError('模型已绑定其他接口，请先修改原接口的模型绑定。', 409);
+        const apiKey = String(input.apiKey || previous?.apiKey || '').trim();
+        if (!apiKey || apiKey.length > 1024 || /[\r\n]/.test(apiKey)) throw new InputError('请填写有效 API 令牌。');
+        const next = { id, name: String(input.name || '新接口').trim().slice(0, 80), kind, baseUrl, models, apiKey };
+        for (const job of store.state.jobs) await store.videoTaskSettings(job);
+        await store.saveConnections([...items.filter(item => item.id !== id), next]);
+        json(response, { ...next, apiKey: undefined, hasKey: true }); return;
+      }
+      if (route === '/api/connections/refresh' && method === 'POST') {
+        await requestJson(request);
+        const issues = [];
+        try { await videoCatalogSync.refresh({ force: true }); } catch { issues.push('视频目录刷新失败'); }
+        try { imageCatalog = await loadImageCatalog(); imageCatalogError = ''; } catch { issues.push('图片目录刷新失败'); }
+        const textConnections = (await store.connections()).some(item => item.kind === 'text');
+        if (textConnections || (await store.textSettings()).apiKey) {
+          try { textCatalog = await readTextCatalog(); textCatalogError = ''; } catch { issues.push('语言模型目录刷新失败'); }
+        }
+        json(response, { message: issues.length ? issues.join('；') + '，请检查令牌，原目录已保留。' : '模型目录已刷新。' }); return;
+      }
+      const connectionRoute = /^\/api\/connections\/([\w-]+)(?:\/(check|models))?$/.exec(route);
+      if (connectionRoute) {
+        const items = await store.connections(), item = items.find(item => item.id === connectionRoute[1]);
+        if (!item) throw new InputError('接口不存在。', 404);
+        if (connectionRoute[2] === 'models' && method === 'GET') {
+          json(response, item.kind === 'video' ? await loadCatalog(item, videoFetcher) : item.kind === 'image' ? (await checkImageConnection({ ...item, imageModel: item.models[0] }, options.imageFetcher || fetch)).models : await loadTextCatalog(item, textFetcher)); return;
+        }
+        if (connectionRoute[2] && method === 'POST') {
+          await requestJson(request);
+          json(response, item.kind === 'video' ? await checkConnection(item, videoFetcher) : item.kind === 'image' ? await checkImageConnection({ ...item, imageModel: item.models[0] }) : await checkTextConnection(item, textFetcher)); return;
+        }
+        if (!connectionRoute[2] && method === 'DELETE') {
+          for (const job of store.state.jobs) await store.videoTaskSettings(job);
+          await store.saveConnections(items.filter(value => value.id !== item.id)); json(response, { deleted: true }); return;
+        }
       }
       if (route === '/api/image-settings' && method === 'PUT') {
         const input = await requestJson(request); const previous = await store.imageSettings();
@@ -296,10 +380,10 @@ export async function createStudio(options = {}) {
       }
       if (route === '/api/text-settings/check' && method === 'POST') { await requestJson(request); json(response, await checkTextConnection(await store.textSettings(), textFetcher)); return; }
       if (route === '/api/text-models/refresh' && method === 'POST') {
-        await requestJson(request); textCatalog = await loadTextCatalog(await store.textSettings(), textFetcher); textCatalogError = ''; json(response, textCatalog); return;
+        await requestJson(request); textCatalog = await readTextCatalog(); textCatalogError = ''; json(response, textCatalog); return;
       }
       if (route === '/api/text-chat' && method === 'POST') {
-        const input = await requestJson(request), settings = await store.textSettings();
+        const input = await requestJson(request, Infinity), settings = await store.connectionFor('text', input.model, await store.textSettings());
         const started = Date.now(), requestId = randomUUID();
         const rawModel = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : settings.textModel || '';
         const model = rawModel.split(settings.apiKey || '\0').join('[已隐藏密钥]')
@@ -337,11 +421,7 @@ export async function createStudio(options = {}) {
         // the default key. Runtime-private records never enter bootstrap/export.
         for (const job of store.state.jobs) await store.videoTaskSettings(job);
         await store.saveSettings(next);
-        if (next.apiKey !== previous.apiKey && !options.catalog) {
-          catalog = []; catalogError = '';
-          if (!next.apiKey) catalogError = '请先保存视频 API Key，再读取当前密钥的模型目录。';
-          else try { catalog = await loadCatalog(next, videoFetcher); } catch { catalogError = '新密钥的模型目录未读取成功，请检查连接后刷新模型。'; }
-        }
+        if (next.apiKey !== previous.apiKey || next.baseUrl !== previous.baseUrl) await videoCatalogSync.refresh({ force: true });
         json(response, publicSettings(next, await storage.publicSettings(), await store.imageSettings(), await store.textSettings())); return;
       }
       if (route === '/api/settings/check' && method === 'POST') { await requestJson(request); json(response, await checkConnection(await store.settings(), videoFetcher)); return; }
@@ -353,14 +433,14 @@ export async function createStudio(options = {}) {
         await requestJson(request); json(response, await storage.testConnection()); return;
       }
       if (route === '/api/models/refresh' && method === 'POST') {
-        await requestJson(request); catalog = []; catalogError = '';
-        try { catalog = await loadCatalog(await store.settings(), videoFetcher); }
-        catch (error) { catalogError = '当前密钥的模型目录读取失败，请检查密钥或稍后刷新。'; throw error; }
-        json(response, catalog); return;
+        await requestJson(request);
+        const snapshot = await videoCatalogSync.refresh({ force: true });
+        if (snapshot.catalogError) throw new InputError(snapshot.catalogError, 502);
+        json(response, snapshot.catalog); return;
       }
       if (route === '/api/shutdown' && method === 'POST') {
         await requestJson(request); json(response, { ok: true });
-        setTimeout(() => { jobs.close(); imageJobs.close(); server.close(); }, 100); return;
+        setTimeout(() => { videoCatalogSync.close(); jobs.close(); imageJobs.close(); server.close(); }, 100); return;
       }
       throw new InputError('这个地址不存在。', 404);
     } catch (error) {
@@ -373,9 +453,10 @@ export async function createStudio(options = {}) {
     async start(port = 18970) {
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
       currentPort = server.address().port;
+      videoCatalogSync.start();
       return `http://127.0.0.1:${currentPort}`;
     },
-    async close() { jobs.close(); imageJobs.close(); await store.pending; await new Promise(resolve => server.close(resolve)); },
+    async close() { videoCatalogSync.close(); jobs.close(); imageJobs.close(); await store.pending; await new Promise(resolve => server.close(resolve)); },
   };
 }
 

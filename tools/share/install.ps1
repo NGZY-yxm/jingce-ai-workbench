@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\JingceStudio'),
     [switch]$NoShortcut
 )
@@ -8,7 +8,7 @@ $destinationRoot = [IO.Path]::GetFullPath($InstallRoot)
 if (-not [Environment]::Is64BitOperatingSystem) { throw '此安装包需要 Windows 10/11 64 位系统。' }
 if ([Environment]::OSVersion.Version.Major -lt 10) { throw '此安装包需要 Windows 10 或更新系统。' }
 if ($sourceRoot.TrimEnd('\') -eq $destinationRoot.TrimEnd('\')) { throw '安装目录不能与解压目录相同；直接使用启动工作台.cmd 即可免安装运行。' }
-$rootFiles = @('server.mjs', 'package.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '说明.txt', '安装镜策.cmd', '启动工作台.cmd', '停止工作台.cmd', '安装视频合成工具.cmd', 'tools\install-ffmpeg.ps1', 'package-manifest.json')
+$rootFiles = @('server.mjs', 'package.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '说明.txt', '安装镜策.cmd', '启动工作台.cmd', '停止工作台.cmd', 'package-manifest.json')
 $programDirectories = @('lib', 'public', 'bin', 'tools\share')
 # Only program files are installed. Existing local projects and keys stay in runtime.
 $copyPlan = @()

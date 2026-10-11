@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$OutputDirectory,
     [string]$ReleaseTag = (Get-Date -Format 'yyyyMMdd')
 )
@@ -27,9 +27,7 @@ $taskCopies = @(
     @{ From = 'docs\连接配置示例.json'; To = 'docs\连接配置示例.json' },
     @{ From = '启动工作台.cmd'; To = '启动工作台.cmd' },
     @{ From = '停止工作台.cmd'; To = '停止工作台.cmd' },
-    @{ From = '安装视频合成工具.cmd'; To = '安装视频合成工具.cmd' },
     @{ From = 'tools\stop-studio.mjs'; To = 'tools\stop-studio.mjs' },
-    @{ From = 'tools\install-ffmpeg.ps1'; To = 'tools\install-ffmpeg.ps1' },
     @{ From = 'tools\package-share.ps1'; To = 'tools\package-share.ps1' },
     @{ From = 'tools\package-github.ps1'; To = 'tools\package-github.ps1' },
     @{ From = 'tools\share\install.cmd'; To = 'tools\share\install.cmd' },

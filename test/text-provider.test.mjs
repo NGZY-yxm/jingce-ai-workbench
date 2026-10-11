@@ -34,7 +34,7 @@ test('语言模型对话发送最小 Chat Completions 请求并读取回复', as
     assert.deepEqual(JSON.parse(options.body), {
       model: 'model-a',
       messages: [
-        { role: 'system', content: '你是一个简洁的创作助手。' },
+        { role: 'system', content: '你是一个简洁的创作助手。\n\n请直接给出最终结果，不要反问，不要要求用户选择方案，不要调用工具。回复必须包含文本内容；若任务要求 JSON，请严格返回指定格式的 JSON。' },
         { role: 'user', content: '请给我一句开场白。' },
       ],
       stream: false,
@@ -44,6 +44,20 @@ test('语言模型对话发送最小 Chat Completions 请求并读取回复', as
   assert.equal(result.content, '雨落下来的时候，城市才开始说话。');
   assert.equal(result.finishReason, 'stop');
   assert.equal(result.usage.totalTokens, 12);
+});
+
+test('没有系统消息时统一补充回复要求，并保留 JSON 请求和原始历史', async () => {
+  const messages = [{ role: 'user', content: '请只返回 JSON：{"scenes":[]}' }];
+  const original = structuredClone(messages);
+  await chatText(settings, { messages }, async (url, options) => {
+    const sent = JSON.parse(options.body).messages;
+    assert.equal(sent[0].role, 'system');
+    assert.match(sent[0].content, /不要要求用户选择方案/);
+    assert.match(sent[0].content, /若任务要求 JSON，请严格返回指定格式的 JSON/);
+    assert.deepEqual(sent.slice(1), original);
+    return reply({ choices: [{ message: { content: '{"scenes":[]}' } }] });
+  });
+  assert.deepEqual(messages, original);
 });
 
 test('语言模型错误会脱敏，不接受空消息或不支持的角色', async () => {

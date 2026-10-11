@@ -14,6 +14,17 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '
 const clone = value => structuredClone(value);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const uid = () => crypto.randomUUID();
+const uiIcon = name => globalThis.lucide?.icons?.[name] ? globalThis.lucide.createElement(globalThis.lucide.icons[name], { width: 18, height: 18, 'aria-hidden': 'true' }).outerHTML : '';
+globalThis.lucide?.createIcons({ attrs: { 'aria-hidden': 'true' } });
+for (const [selector, name] of Object.entries({
+  '[data-canvas-tool="select"] > span': 'MousePointer2', '[data-canvas-tool="hand"] > span': 'Hand',
+  '.canvas-creation-toolbar [data-canvas-add="text"] > span': 'Type', '.canvas-creation-toolbar [data-canvas-add="ai"] > span': 'Sparkles',
+  '.canvas-creation-toolbar [data-canvas-add="image"] > span': 'ImagePlus', '.canvas-creation-toolbar [data-canvas-add="shot"] > span': 'Clapperboard',
+  '.canvas-creation-toolbar [data-canvas-add="assets"] > span': 'FolderOpen', '#undo-canvas': 'Undo2', '#redo-canvas': 'Redo2', '#import-project': 'Import',
+})) {
+  const control = $(selector), icon = uiIcon(name);
+  if (control && icon) control.innerHTML = icon;
+}
 const THEME_STORAGE_KEY = 'jingce-theme';
 const VIDEO_OPERATION_STORAGE_KEY = 'jingce-pending-video-operations';
 const TEXT_HISTORY_STORAGE_KEY = 'jingce-text-chat-history';
@@ -43,10 +54,10 @@ function applyTheme(theme, persist = false) {
   }
 }
 function initTheme() {
-  // The Liblib-inspired dark workspace is the default; users can still choose day mode.
-  let theme = 'night';
-  try { theme = localStorage.getItem(THEME_STORAGE_KEY) || document.documentElement?.dataset?.theme || 'night'; } catch {
-    theme = document.documentElement?.dataset?.theme || 'night';
+  // Default to day mode while respecting the user's saved theme preference.
+  let theme = 'day';
+  try { theme = localStorage.getItem(THEME_STORAGE_KEY) || document.documentElement?.dataset?.theme || 'day'; } catch {
+    theme = document.documentElement?.dataset?.theme || 'day';
   }
   applyTheme(theme);
   $('#theme-select')?.addEventListener('change', event => {
@@ -56,8 +67,9 @@ function initTheme() {
 }
 initTheme();
 const state = { token: '', projects: [], deletedProjects: [], project: null, saved: null, settings: {}, catalog: [], imageCatalog: [], imageCatalogError: '', textCatalog: [], textCatalogError: '', kinds: {}, tools: {},
-  jobs: [], imageJobs: [], imageReferenceIds: [], textMessages: [], textError: '', textBusy: false, showDeletedJobs: false, showDeletedImageJobs: false, showDeletedAssets: false, view: 'canvas', dirty: new Set(), versions: {}, saveTask: null, saveTimer: null, saveError: null,
-  pollBusy: false, switching: false, submitting: new Set(), aiBusy: new Set(), imageOperations: new Map(), videoOperations: loadVideoOperations() };
+  jobs: [], imageJobs: [], imageReferenceIds: [], textMessages: [], textError: '', textBusy: false, showDeletedJobs: false, showDeletedImageJobs: false, showDeletedAssets: false, view: 'overview', dirty: new Set(), versions: {}, saveTask: null, saveTimer: null, saveError: null,
+  pollBusy: false, catalogBusy: false, catalogChanging: 0, catalogRequestId: 0, pendingCatalog: null, switching: false, submitting: new Set(), aiBusy: new Set(), imageOperations: new Map(), videoOperations: loadVideoOperations() };
+let newProjectView = 'canvas';
 let resultDetailsSelection = null, selectedChatText = '';
 const fields = ['title', 'brief', 'graph', 'scenes'];
 const jobLabels = { preparing: '上传素材中', waiting: '等待提交', submitting: '提交中', queued: '平台排队中', running: '生成中', downloading: '保存中', download_pending: '待下载',
@@ -133,13 +145,13 @@ function loadTextHistory(projectId) {
   try {
     const raw = JSON.parse(localStorage.getItem(`${TEXT_HISTORY_STORAGE_KEY}:${projectId}`) || '[]');
     return Array.isArray(raw) ? raw.filter(item => item && ['user', 'assistant'].includes(item.role)
-      && typeof item.content === 'string' && item.content.trim()).slice(-24) : [];
+      && typeof item.content === 'string' && item.content.trim()) : [];
   } catch { return []; }
 }
 function saveTextHistory() {
   const projectId = state.project?.id;
   if (!projectId) return;
-  try { localStorage.setItem(`${TEXT_HISTORY_STORAGE_KEY}:${projectId}`, JSON.stringify(state.textMessages.slice(-24))); }
+  try { localStorage.setItem(`${TEXT_HISTORY_STORAGE_KEY}:${projectId}`, JSON.stringify(state.textMessages)); }
   catch { /* 对话仍保留在当前页面 */ }
 }
 
@@ -289,6 +301,33 @@ function renderProjects() {
   $('#project-list').innerHTML = state.projects.length ? state.projects.map(project => `<div class="project-row${project.id === state.project?.id ? ' active' : ''}"><button class="project-item${project.id === state.project?.id ? ' active' : ''}" data-project-id="${escapeHtml(project.id)}" title="${escapeHtml(project.title)}"${disabled}><span class="project-icon">▧</span><span>${escapeHtml(project.title)}</span></button><button class="delete-project" data-delete-project="${escapeHtml(project.id)}" title="删除工程：${escapeHtml(project.title)}" aria-label="删除工程：${escapeHtml(project.title)}"${disabled}>删除</button></div>`).join('') : '<p class="project-list-empty">还没有视频工程</p>';
   $('#deleted-project-count').textContent = state.deletedProjects.length ? `（${state.deletedProjects.length}）` : '';
   renderDeletedProjects();
+  renderOverview();
+}
+function renderOverview() {
+  const host = $('#overview-projects');
+  if (!host) return;
+  const query = ($('#overview-search')?.value || '').trim().toLocaleLowerCase('zh-CN');
+  const projects = state.projects.filter(project => project.title.toLocaleLowerCase('zh-CN').includes(query));
+  projects.sort($('#overview-sort')?.value === 'name'
+    ? (a, b) => a.title.localeCompare(b.title, 'zh-CN')
+    : (a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  $('#overview-project-count').textContent = state.projects.length;
+  host.innerHTML = projects.length ? projects.map(project => {
+    const assets = (project.assets || []).filter(asset => !asset.deletedAt);
+    const cover = [...assets].reverse().find(asset => asset.kind === 'image') || assets.find(asset => asset.kind === 'video');
+    const source = cover ? `/api/assets/${encodeURIComponent(cover.id)}` : '';
+    const preview = cover?.kind === 'image' ? `<img src="${source}" alt="${escapeHtml(project.title)}" loading="lazy">`
+      : cover?.kind === 'video' ? `<video src="${source}#t=0.1" muted playsinline preload="auto" aria-label="${escapeHtml(project.title)}"></video>`
+      : `<div class="project-cover-empty">${uiIcon('Workflow')}<span>创作画布</span></div>`;
+    const disabled = state.switching ? ' disabled' : '';
+    return `<article class="overview-project-card"><button class="overview-project-open" data-open-project="${escapeHtml(project.id)}" aria-label="打开工程：${escapeHtml(project.title)}"${disabled}><div class="project-cover">${preview}<span class="project-open-hint">打开画布 ${uiIcon('ArrowUpRight')}</span></div><div class="project-card-copy"><h3 title="${escapeHtml(project.title)}">${escapeHtml(project.title)}</h3><p>${(project.scenes || []).length} 个视频 · ${assets.length} 份素材</p><time datetime="${escapeHtml(project.updatedAt)}">${escapeHtml(new Date(project.updatedAt).toLocaleDateString('zh-CN'))} 更新</time></div></button><button class="project-card-delete" data-delete-overview-project="${escapeHtml(project.id)}" title="移到已删除工程" aria-label="删除工程：${escapeHtml(project.title)}"${disabled}>${uiIcon('Trash2')}</button></article>`;
+  }).join('') : `<div class="overview-empty">${uiIcon('FolderOpen')}<h3>${query ? '没有匹配的工程' : '还没有工程'}</h3>${query ? '<p>试试其他工程名称</p><button class="button" data-clear-project-search>清除搜索</button>' : '<button class="primary" data-create-overview-project>新建工程</button>'}</div>`;
+  host.insertAdjacentHTML('beforeend', `<button class="overview-project-card overview-add-canvas" data-create-overview-project aria-label="新建画布" title="新建画布"${state.switching ? ' disabled' : ''}>${uiIcon('Plus')}</button>`);
+}
+async function openOverviewProject(id) {
+  if (state.switching) return;
+  await switchProject(id);
+  if (state.project?.id === id) setView('canvas');
 }
 function renderDeletedProjects() {
   const disabled = state.switching ? ' disabled' : '';
@@ -348,14 +387,18 @@ function renderBrief() {
 }
 function setView(view) {
   view = ({ scenes: 'videos', delivery: 'results' })[view] || view;
-  if (!['canvas', 'assets', 'images', 'videos', 'results', 'text'].includes(view)) view = 'canvas';
+  if (!['overview', 'canvas', 'assets', 'images', 'videos', 'results', 'text'].includes(view)) view = 'overview';
+  if (view !== 'overview' && !state.project) { openNewProject(view); return; }
   if (view !== state.view) clearTextSelectionActions();
   if (state.view === 'canvas' && view !== 'canvas') { canvas.finishEditing(); canvas.setExpanded?.(false); }
   if (view !== 'results') closeResultDetails();
   state.view = view;
-  if (!state.project) return;
+  try { localStorage.setItem('jingce-active-view', view); } catch {}
+  document.body.dataset.view = view;
+  $('#current-view-name').textContent = { overview: '项目总览', canvas: '创作画布', assets: '素材库', images: '图片生成', videos: '视频生成', results: '生成结果', text: '创作助手' }[view];
   $$('.view').forEach(element => element.classList.toggle('hidden', element.id !== `${view}-view`));
   $$('.tab').forEach(button => { const active = button.dataset.view === view; button.classList.toggle('active', active); button.setAttribute('aria-selected', active); });
+  if (view === 'overview') { renderOverview(); return; }
   if (view === 'canvas') { canvas.activate(); renderCanvas(); }
   if (view === 'assets') renderAssets();
   if (view === 'images') { renderImageGeneration(); renderImageJobs(); }
@@ -365,9 +408,10 @@ function setView(view) {
 }
 function renderAll() {
   $('.workspace').classList.toggle('no-project', !state.project);
-  $('#empty-workspace').hidden = Boolean(state.project);
+  $('#empty-workspace').hidden = true;
   renderProjects(); renderCounts(); renderSettingsStatus();
-  if (state.project) { renderBrief(); setView(state.view); }
+  if (state.project) renderBrief();
+  setView(state.project ? state.view : 'overview');
 }
 
 function renderCanvas() { canvas.render(); }
@@ -509,7 +553,8 @@ async function generateScene(sceneId) {
     const p = parameters(scene), operationId = pendingOperation || uid();
     const input = pending?.input || { sceneId, model: p.model?.name, duration: p.duration, count: p.count,
       requestMode: p.model?.requestMode || state.settings.videoRequestMode, ratio: scene.ratio || undefined, resolution: scene.resolution || undefined,
-      referenceAssetId: scene.referenceAssetId, operationId };
+      referenceAssetId: scene.referenceAssetId, operationId,
+      quote: { price: p.tier?.price ?? null, currency: p.model?.pricingCurrency || '' } };
     setVideoOperation(key, operationId, input); started = true;
     const batch = await api(`/api/projects/${projectId}/batches`, 'POST', input);
     setVideoOperation(key, null);
@@ -782,7 +827,9 @@ function renderJobs() {
       job.providerStartedAt ? `平台开始：${new Date(job.providerStartedAt).toLocaleString('zh-CN')}` : '',
       job.lastCheckedAt ? `最近同步：${new Date(job.lastCheckedAt).toLocaleTimeString('zh-CN')}` : '',
       job.providerStatus ? `平台状态：${job.providerStatus}` : ''].filter(Boolean).join(' · ');
-    return `<article class="job-row" data-job-id="${escapeHtml(job.id)}"><span class="job-mark ${escapeHtml(job.state)}"></span><div class="job-main"><strong>${escapeHtml(scene?.title || '已移除的视频生成项')} · ${escapeHtml(job.model)}</strong><p>${escapeHtml(message)}${job.providerTaskId ? `<br>平台任务编号：${escapeHtml(job.providerTaskId)}` : ''}</p><p>${escapeHtml(new Date(job.createdAt).toLocaleString('zh-CN'))} · ${job.duration} 秒 / ${escapeHtml(job.resolution)} · ${Number.isFinite(job.estimate) ? `提交时报价 ${escapeHtml(job.estimate)} 余额单位` : '费用以平台账单为准'}${job.requestMode ? job.referenceCount ? ` · ${escapeHtml(job.ratio || '工程比例')} · ${job.referenceCount} 份参考素材` : ' · 平台默认比例' : ''}</p>${timing ? `<p>${escapeHtml(timing)}${job.progress != null ? ' · 进度由平台报告' : ''}</p>` : ''}${job.deletedAt ? `<p>删除于 ${escapeHtml(new Date(job.deletedAt).toLocaleString('zh-CN'))}</p>` : ''}</div><span class="job-label">${escapeHtml(rejectedParameters ? '平台未受理' : jobLabels[job.state] || job.state)}${job.progress != null ? ` ${job.progress}%` : ''}</span><div class="job-actions">${job.state === 'done' && job.assetId ? `<a class="button" href="/api/assets/${encodeURIComponent(job.assetId)}?download=1" download>下载视频</a>` : ''}${retry ? `<button class="button" data-query-job="${escapeHtml(job.id)}">${job.state === 'download_pending' ? '重试下载' : job.providerTaskId ? '重新查询' : job.state === 'uncertain' ? '补填编号' : '重试下载'}</button>` : ''}${job.deletedAt ? `<button class="button" data-restore-job="${escapeHtml(job.id)}">恢复记录</button>` : `<button class="button delete-job" data-delete-job="${escapeHtml(job.id)}" title="移到已删除记录，保留视频和任务跟踪">删除记录</button>`}</div></article>`;
+    const quote = Number.isFinite(job.estimate) ? job.pricingCurrency === 'CNY'
+      ? `提交时公开报价 ￥${job.estimate}` : `提交时报价 ${job.estimate} ${job.priceUnit || '余额单位'}` : '费用以平台账单为准';
+    return `<article class="job-row" data-job-id="${escapeHtml(job.id)}"><span class="job-mark ${escapeHtml(job.state)}"></span><div class="job-main"><strong>${escapeHtml(scene?.title || '已移除的视频生成项')} · ${escapeHtml(job.model)}</strong><p>${escapeHtml(message)}${job.providerTaskId ? `<br>平台任务编号：${escapeHtml(job.providerTaskId)}` : ''}</p><p>${escapeHtml(new Date(job.createdAt).toLocaleString('zh-CN'))} · ${job.duration} 秒 / ${escapeHtml(job.resolution)} · ${escapeHtml(quote)}${job.requestMode ? job.referenceCount ? ` · ${escapeHtml(job.ratio || '工程比例')} · ${job.referenceCount} 份参考素材` : ' · 平台默认比例' : ''}</p>${timing ? `<p>${escapeHtml(timing)}${job.progress != null ? ' · 进度由平台报告' : ''}</p>` : ''}${job.deletedAt ? `<p>删除于 ${escapeHtml(new Date(job.deletedAt).toLocaleString('zh-CN'))}</p>` : ''}</div><span class="job-label">${escapeHtml(rejectedParameters ? '平台未受理' : jobLabels[job.state] || job.state)}${job.progress != null ? ` ${job.progress}%` : ''}</span><div class="job-actions">${job.state === 'done' && job.assetId ? `<a class="button" href="/api/assets/${encodeURIComponent(job.assetId)}?download=1" download>下载视频</a>` : ''}${retry ? `<button class="button" data-query-job="${escapeHtml(job.id)}">${job.state === 'download_pending' ? '重试下载' : job.providerTaskId ? '重新查询' : job.state === 'uncertain' ? '补填编号' : '重试下载'}</button>` : ''}${job.deletedAt ? `<button class="button" data-restore-job="${escapeHtml(job.id)}">恢复记录</button><button class="button project-danger" data-permanent-job="${escapeHtml(job.id)}"${!['done', 'failed'].includes(job.state) ? ' disabled title="请先处理完任务再彻底删除"' : ''}>彻底删除</button>` : `<button class="button delete-job" data-delete-job="${escapeHtml(job.id)}" title="移到已删除记录，保留视频和任务跟踪">删除记录</button>`}</div></article>`;
   }).join('') : '<div class="empty-state" style="padding:25px">暂无生成任务记录。提交后的进度和结果会显示在这里。</div>';
 }
 const imageJobLabels = { waiting: '排队中', preparing: '准备参考图', submitting: '生成中', uncertain: '需核对平台', download_pending: '待保存', saving: '保存中', done: '已完成', failed: '失败' };
@@ -918,7 +965,7 @@ function renderImageJobs() {
     const node = state.project.graph.nodes.find(node => node.id === job.nodeId);
     const retry = job.state === 'download_pending';
     const preview = job.state === 'done' && job.assetId ? `<img class="image-job-preview" loading="lazy" src="/api/assets/${encodeURIComponent(job.assetId)}" alt="生成图片">` : '<span class="image-job-preview-placeholder">✦</span>';
-    const actions = `${job.state === 'done' && job.assetId ? `<button class="button" data-preview-image-job="${escapeHtml(job.assetId)}">预览</button><a class="button" href="/api/assets/${encodeURIComponent(job.assetId)}?download=1" download>下载图片</a>` : ''}${retry ? `<button class="button" data-retry-image-job="${escapeHtml(job.id)}">重试保存</button>` : ''}${job.deletedAt ? `<button class="button" data-restore-image-job="${escapeHtml(job.id)}">恢复记录</button>` : `<button class="button delete-job" data-delete-image-job="${escapeHtml(job.id)}">删除记录</button>`}`;
+    const actions = `${job.state === 'done' && job.assetId ? `<button class="button" data-preview-image-job="${escapeHtml(job.assetId)}">预览</button><a class="button" href="/api/assets/${encodeURIComponent(job.assetId)}?download=1" download>下载图片</a>` : ''}${retry ? `<button class="button" data-retry-image-job="${escapeHtml(job.id)}">重试保存</button>` : ''}${job.deletedAt ? `<button class="button" data-restore-image-job="${escapeHtml(job.id)}">恢复记录</button><button class="button project-danger" data-permanent-image-job="${escapeHtml(job.id)}"${!['done', 'failed'].includes(job.state) ? ' disabled title="请先处理完任务再彻底删除"' : ''}>彻底删除</button>` : `<button class="button delete-job" data-delete-image-job="${escapeHtml(job.id)}">删除记录</button>`}`;
     return `<article class="job-row image-job-row"><div class="image-job-thumb">${preview}</div><div class="job-main"><strong>${escapeHtml(node?.label || scene?.title || (job.nodeId ? '已移除的生图卡片' : '通用生图'))} · ${escapeHtml(job.model)}</strong><p class="image-job-prompt">${escapeHtml(job.prompt)}</p><p>${escapeHtml(new Date(job.createdAt).toLocaleString('zh-CN'))}${job.count > 1 ? ` · 候选 ${job.variantIndex || 1} / ${job.count}` : ''}${job.referenceAssetIds?.length ? ` · ${job.referenceAssetIds.length} 张参考图` : ''}${job.message ? ` · ${escapeHtml(job.message)}` : ''}</p>${job.deletedAt ? `<p>删除于 ${escapeHtml(new Date(job.deletedAt).toLocaleString('zh-CN'))}</p>` : ''}</div><span class="job-label">${escapeHtml(imageJobLabels[job.state] || job.state)}</span><div class="job-actions">${actions}</div></article>`;
   }).join('') : '<div class="empty-state" style="padding:25px">暂无图片任务。填写上方图片提示词并提交，或在创作画布添加“生图”卡片。</div>';
 }
@@ -985,6 +1032,17 @@ async function refreshImageJobs() {
 $('#toggle-deleted-image-jobs').onclick = () => { state.showDeletedImageJobs = !state.showDeletedImageJobs; renderImageJobs(); };
 $('#refresh-image-jobs').onclick = () => action($('#refresh-image-jobs'), refreshImageJobs);
 $('#image-job-list').addEventListener('click', event => {
+  const permanent = event.target.closest('[data-permanent-image-job]');
+  if (permanent) {
+    if (!window.confirm('彻底删除这条生成任务记录？\n\n删除后无法恢复。已生成的素材会保留。')) return;
+    action(permanent, async () => {
+      const result = await api(`/api/image-jobs/${permanent.dataset.permanentImageJob}/permanent`, 'DELETE');
+      await refreshImageJobs();
+      toast(result.cleanupPending ? '任务记录已彻底删除，附属文件将在重启后继续清理。' : '任务记录已彻底删除。');
+    });
+    return;
+  }
+
   const preview = event.target.closest('[data-preview-image-job]');
   if (preview) {
     const asset = activeAssets().find(item => item.id === preview.dataset.previewImageJob);
@@ -1003,6 +1061,17 @@ $('#image-job-list').addEventListener('click', event => {
 });
 $('#toggle-deleted-jobs').onclick = () => { state.showDeletedJobs = !state.showDeletedJobs; renderJobs(); };
 $('#job-list').addEventListener('click', event => {
+  const permanent = event.target.closest('[data-permanent-job]');
+  if (permanent) {
+    if (!window.confirm('彻底删除这条生成任务记录？\n\n删除后无法恢复。已生成的素材会保留。')) return;
+    action(permanent, async () => {
+      const result = await api(`/api/jobs/${permanent.dataset.permanentJob}/permanent`, 'DELETE');
+      await refreshJobs();
+      toast(result.cleanupPending ? '任务记录已彻底删除，附属文件将在重启后继续清理。' : '任务记录已彻底删除。');
+    });
+    return;
+  }
+
   const recordButton = event.target.closest('[data-delete-job],[data-restore-job]');
   if (recordButton) {
     const deleting = Boolean(recordButton.dataset.deleteJob);
@@ -1083,14 +1152,16 @@ function syncResultDetails() {
 function showResultDetails(asset) {
   asset = generatedAssets().find(item => item.id === asset?.id);
   if (!asset) { toast('这个生成结果已移除，请在素材库中恢复后查看。', true); return; }
-  const kind = asset.kind === 'image' ? '图片' : '视频';
+  const kind = asset.kind === 'image' ? '图片' : asset.kind === 'audio' ? '音频' : '视频';
   const job = (asset.kind === 'image' ? state.imageJobs : state.jobs).find(item => item.assetId === asset.id);
   const source = '/api/assets/' + encodeURIComponent(asset.id);
   const date = Number.isFinite(Date.parse(asset.createdAt)) ? new Date(asset.createdAt).toLocaleString('zh-CN', { hour12: false }) : '';
   const metadata = [['类型', kind], ['模型', job?.model], ['生成时间', date], ['文件大小', Number.isFinite(asset.size) ? sizeLabel(asset.size) : '']].filter(([, value]) => value);
   const media = asset.kind === 'image'
     ? `<img src="${source}" alt="${escapeHtml(asset.name)}">`
-    : `<video controls playsinline preload="metadata" src="${source}" aria-label="${escapeHtml(asset.name)}"></video>`;
+    : asset.kind === 'audio'
+      ? `<audio controls preload="metadata" src="${source}" aria-label="${escapeHtml(asset.name)}"></audio>`
+      : `<video controls playsinline preload="metadata" src="${source}" aria-label="${escapeHtml(asset.name)}"></video>`;
   $('#result-details-title').textContent = asset.name;
   $('#result-details-content').innerHTML = `<div class="result-details-preview">${media}</div><dl class="result-details-meta">${metadata.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${job?.prompt ? `<details class="result-details-prompt"><summary>提示词</summary><p>${escapeHtml(job.prompt)}</p></details>` : ''}<div class="result-details-actions"><a class="button" href="${source}?download=1" download>下载${kind}</a><button class="button" type="button" data-add-to-canvas="${escapeHtml(asset.id)}">放到画布</button><button class="button project-danger" type="button" data-delete-asset="${escapeHtml(asset.id)}">删除</button></div>`;
   resultDetailsSelection = { projectId: state.project.id, assetId: asset.id };
@@ -1180,7 +1251,7 @@ function renderResults() {
   });
   $('#result-list').innerHTML = assets.length ? assets.map(asset => {
     const source = '/api/assets/' + encodeURIComponent(asset.id);
-    const thumbnail = asset.kind === 'image' ? `<img loading="lazy" src="${source}" alt="${escapeHtml(asset.name)}">` : `<video muted playsinline preload="metadata" src="${source}#t=0.1" aria-label="${escapeHtml(asset.name)}视频缩略图"></video><span class="result-play" aria-hidden="true">▶</span>`;
+      const thumbnail = asset.kind === 'image' ? `<img loading="lazy" src="${source}" alt="${escapeHtml(asset.name)}">` : `<video muted playsinline preload="auto" src="${source}#t=0.1" aria-label="${escapeHtml(asset.name)}视频缩略图"></video><span class="result-play" aria-hidden="true">▶</span>`;
     return `<article class="result-card" data-asset-id="${escapeHtml(asset.id)}"><button class="result-preview ${asset.kind}" type="button" data-preview-asset="${escapeHtml(asset.id)}" aria-label="预览 ${escapeHtml(asset.name)}"><span class="result-thumbnail-placeholder" aria-hidden="true">${asset.kind === 'image' ? '图片' : '视频'}缩略图加载中</span>${thumbnail}<span class="result-kind">${asset.kind === 'image' ? '图片' : '视频'}</span></button><div class="result-body"><h3 class="result-title" title="${escapeHtml(asset.name)}">${escapeHtml(asset.name)}</h3><button class="button result-details-button" type="button" data-result-details="${escapeHtml(asset.id)}" aria-label="查看 ${escapeHtml(asset.name)} 的详情">详情</button></div></article>`;
   }).join('') : '<div class="empty-state" style="grid-column:1/-1"><strong>还没有' + (filter === 'image' ? '图片' : filter === 'video' ? '视频' : '生成') + '结果。</strong>已保存成功的图片和视频会显示在这里，可预览、下载或放到画布继续创作。生成中的任务请在对应生成页查看。</div>';
   for (const media of $$('#result-list .result-preview img, #result-list .result-preview video')) {
@@ -1254,10 +1325,37 @@ function renderSettings() {
   $('#key-state').textContent = state.settings.hasKey ? '已保存密钥。此处不回显，留空可保留原密钥。' : '尚未保存 API Key。请在平台官网创建令牌后在此填写。';
   $('#settings-form [name=apiKey]').value = ''; $('#connection-message').textContent = state.catalogError || state.settings.message || '';
   $('#connection-message').classList.toggle('error', Boolean(state.catalogError));
+  renderVideoCatalogStatus();
+}
+function renderVideoCatalogStatus() {
   const catalogNote = $('#model-catalog-note');
-  if (catalogNote) catalogNote.textContent = state.catalog.length
-    ? `已读取 ${state.catalog.length} 个视频模型。请到“视频生成”或画布视频卡片详情中，为每个视频生成项选择模型、画面比例、时长和画质。`
-    : '模型目录尚未读取。保存连接后，点击“刷新模型目录”，再到视频生成项中选择模型和画质。';
+  const synced = state.catalogSyncedAt ? `最近同步：${new Date(state.catalogSyncedAt).toLocaleTimeString('zh-CN')}。` : '';
+  if (catalogNote) catalogNote.textContent = state.catalogError || (state.catalog.length
+    ? `已读取 ${state.catalog.length} 个视频模型。每分钟自动同步，生成前再次核对。${synced}公开报价和已发布的分辨率档位随平台更新；未公开的时长范围会单独注明。`
+    : '模型目录尚未读取。保存连接后，点击“刷新模型目录”。');
+}
+function applyPendingVideoCatalog() {
+  if (!state.pendingCatalog || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)
+    || state.submitting.size || canvas.busy() || sceneVideoPlaying()) return;
+  const snapshot = state.pendingCatalog; state.pendingCatalog = null;
+  const changed = !same(state.catalog, snapshot.catalog);
+  Object.assign(state, snapshot); renderVideoCatalogStatus();
+  if (changed) { renderScenes(); canvas.render(); }
+}
+function beginVideoCatalogChange() {
+  state.pendingCatalog = null;
+  return ++state.catalogRequestId;
+}
+async function syncVideoCatalog() {
+  if (state.catalogBusy || state.catalogChanging || document.hidden) return;
+  const requestId = ++state.catalogRequestId;
+  state.catalogBusy = true;
+  try {
+    const snapshot = await api('/api/models');
+    if (requestId !== state.catalogRequestId) return;
+    state.pendingCatalog = snapshot; applyPendingVideoCatalog();
+  } catch { /* Keep local edits intact; the server checks freshness before submission. */ }
+  finally { state.catalogBusy = false; }
 }
 function renderImageSettings() {
   const image = state.settings.image || {};
@@ -1482,18 +1580,33 @@ $('#close-settings').onclick = () => $('#settings-dialog').close();
 $('#close-image-settings').onclick = () => $('#image-settings-dialog').close();
 async function saveSettings() {
   const form = $('#settings-form');
-  state.settings = await api('/api/settings', 'PUT', { baseUrl: form.elements.baseUrl.value, apiKey: form.elements.apiKey.value });
-  form.elements.apiKey.value = ''; const latest = await api('/api/bootstrap'); state.catalog = latest.catalog; state.catalogError = latest.catalogError; renderSettingsStatus(); canvas.render();
-  $('#key-state').textContent = state.settings.hasKey ? '密钥已保存在本机，页面不回显。' : '尚未保存密钥。';
+  const requestId = beginVideoCatalogChange(); state.catalogChanging += 1;
+  try {
+    const settings = await api('/api/settings', 'PUT', { baseUrl: form.elements.baseUrl.value, apiKey: form.elements.apiKey.value });
+    if (requestId !== state.catalogRequestId) return;
+    state.settings = settings; form.elements.apiKey.value = '';
+    const latest = await api('/api/models');
+    if (requestId !== state.catalogRequestId) return;
+    Object.assign(state, latest); renderSettingsStatus(); canvas.render();
+    $('#key-state').textContent = state.settings.hasKey ? '密钥已保存在本机，页面不回显。' : '尚未保存密钥。';
+  } finally { state.catalogChanging -= 1; }
 }
 $('#settings-form').onsubmit = event => {
   event.preventDefault(); action($('#settings-form [type=submit]'), async () => { await saveSettings(); $('#settings-dialog').close(); renderScenes(); toast('模型连接已保存到本机。'); });
 };
-$('#refresh-models').onclick = () => action($('#refresh-models'), async () => {
+async function refreshVideoCatalog() {
   if ($('#settings-form [name=apiKey]').value.trim()) await saveSettings();
-  state.catalog = await api('/api/models/refresh', 'POST', {}); state.catalogError = ''; renderSettings();
-  $('#connection-message').textContent = `已读取 ${state.catalog.length} 个视频模型。来自当前密钥；报价请联系平台，实际扣费以账单为准。`; renderScenes(); canvas.render();
-});
+  const requestId = beginVideoCatalogChange(); state.catalogChanging += 1;
+  try {
+    await api('/api/models/refresh', 'POST', {});
+    if (requestId !== state.catalogRequestId) return;
+    const latest = await api('/api/models');
+    if (requestId !== state.catalogRequestId) return;
+    Object.assign(state, latest); renderSettings();
+    $('#connection-message').textContent = `已同步 ${state.catalog.length} 个视频模型；公开报价作为预估，实际扣费以平台账单为准。`; renderScenes(); canvas.render();
+  } finally { state.catalogChanging -= 1; }
+}
+$('#refresh-models').onclick = () => action($('#refresh-models'), refreshVideoCatalog);
 $('#check-connection').onclick = () => action($('#check-connection'), async () => {
   try {
     await saveSettings(); const result = await api('/api/settings/check', 'POST', {});
@@ -1616,7 +1729,7 @@ $('#image-page-reference-input')?.addEventListener('change', () => action($('#im
 $('#project-list').onclick = event => {
   const deletion = event.target.closest('[data-delete-project]');
   if (deletion) { action(deletion, () => deleteProject(deletion.dataset.deleteProject)); return; }
-  const button = event.target.closest('[data-project-id]'); if (button) switchProject(button.dataset.projectId);
+  const button = event.target.closest('[data-project-id]'); if (button) openOverviewProject(button.dataset.projectId);
 };
 $('#open-deleted-projects').onclick = () => action($('#open-deleted-projects'), async () => { await refreshProjectList(); $('#deleted-projects-dialog').showModal(); });
 $('#close-deleted-projects').onclick = () => $('#deleted-projects-dialog').close();
@@ -1660,12 +1773,30 @@ $('#brief-form').onsubmit = event => {
     adoptRemote(project); setView('canvas'); canvas.syncScenes(); canvas.render(); toast('视频创作草案已放到画布，使用本地模板，未调用收费模型。');
   });
 };
-$('#new-project').onclick = () => { $('#new-form').reset(); $('#new-dialog').showModal(); $('#new-form input').focus(); };
+function openNewProject(view = 'canvas') {
+  if (state.switching) return;
+  newProjectView = view;
+  $('#new-form').reset(); $('#new-dialog').showModal(); $('#new-form input').focus();
+}
+$('#new-project').onclick = () => openNewProject();
+$('#overview-import').onclick = () => $('#import-project').click();
+$('#overview-deleted-projects').onclick = () => $('#open-deleted-projects').click();
+$('#overview-search').oninput = renderOverview;
+$('#overview-sort').onchange = renderOverview;
+$('#overview-projects').onclick = event => {
+  const open = event.target.closest('[data-open-project]');
+  if (open) { action(open, () => openOverviewProject(open.dataset.openProject)); return; }
+  const deletion = event.target.closest('[data-delete-overview-project]');
+  if (deletion) { action(deletion, () => deleteProject(deletion.dataset.deleteOverviewProject)); return; }
+  if (event.target.closest('[data-create-overview-project]')) openNewProject();
+  if (event.target.closest('[data-clear-project-search]')) { $('#overview-search').value = ''; renderOverview(); }
+};
+$$('[data-launch-view]').forEach(button => button.onclick = () => setView(button.dataset.launchView));
 $('#close-new').onclick = () => $('#new-dialog').close();
 $('#new-form').onsubmit = event => {
   event.preventDefault(); action($('#new-form [type=submit]'), async () => {
     await flush(); setProject(await api('/api/projects', 'POST', { title: $('#new-form input').value }));
-    $('#new-dialog').close(); setView('canvas'); fitCanvas(); toast('新工程已创建。');
+    $('#new-dialog').close(); setView(newProjectView); if (newProjectView === 'canvas') fitCanvas(); toast('新工程已创建。');
   });
 };
 $('#import-project').onclick = () => $('#import-input').click();
@@ -1704,6 +1835,7 @@ function adoptRemote(project) {
 }
 async function poll() {
   if (state.pollBusy || state.switching || document.hidden || sceneVideoPlaying()) return;
+  applyPendingVideoCatalog();
   state.pollBusy = true;
   const activeId = state.project?.id;
   try {
@@ -1725,9 +1857,124 @@ async function poll() {
 async function init() {
   try {
     const bootstrap = await api('/api/bootstrap'); Object.assign(state, bootstrap);
+    try { state.view = localStorage.getItem('jingce-active-view') || 'overview'; } catch {}
     let project = state.projects.find(project => project.id === localStorage.getItem('jingce-active-project')) || state.projects[0];
     setProject(project || null); await refreshJobs(); await refreshImageJobs(); setInterval(poll, 5000);
+    setInterval(syncVideoCatalog, 60000);
     if (state.catalogError) toast(state.catalogError, true);
   } catch (error) { toast(error.message, true); saveLabel('工作台未连接', true); }
 }
+// One connection center owns model-to-token routing; secrets never enter the list.
+let centerConnections = [];
+const centerVerification = new Map();
+const centerForm = $('#connection-editor');
+let centerTokenModels = null;
+function centerOptions(selected = []) {
+  const kind = centerForm.elements.kind.value;
+  const urls = kind === 'video' ? ['https://sub.beibeihai.xyz', 'https://direct.beibeihai.xyz'] : [kind === 'image' ? 'https://sub.beibeihai.xyz' : 'https://sub.beibeihai.xyz/v1'];
+  centerForm.elements.baseUrl.innerHTML = urls.map(url => '<option>' + escapeHtml(url) + '</option>').join('');
+  const catalog = kind === 'image' ? state.imageCatalog : kind === 'text' ? state.textCatalog : state.catalog;
+  const names = [...new Set([...(centerTokenModels || catalog || []).map(model => model.name), ...selected])];
+  centerForm.elements.models.innerHTML = names.map(name => '<option value="' + escapeHtml(name) + '"' + (selected.includes(name) ? ' selected' : '') + '>' + escapeHtml(name) + '</option>').join('');
+  renderCenterModelChoices();
+}
+function resetCenterEditor() { centerTokenModels = null; centerForm.reset(); centerForm.elements.id.value = ''; $('#connection-editor-title').textContent = '添加接口'; $('#center-editor-message').textContent = ''; $('#center-model-search').value = ''; centerOptions(); centerForm.hidden = true; $('#center-list-view').hidden = false; }
+async function refreshCenter() {
+  centerConnections = await api('/api/connections');
+  const kindLabel = { image: '图片', video: '视频', text: '语言模型' };
+  const row = (name, kind, url, models, status, button) => '<tr><td><strong>' + escapeHtml(name) + '</strong></td><td>' + escapeHtml(kindLabel[kind]) + '</td><td class="interface-url">' + escapeHtml(url) + '</td><td>' + escapeHtml(models.join('、') || '按生成项选择') + '</td><td data-connection-status>' + escapeHtml(status) + '</td><td>' + button + '</td></tr>';
+  const saved = centerConnections.map(item => row(item.name, item.kind, item.baseUrl, item.models, centerVerification.get(item.id) || '令牌已保存 · 待验证', '<button type="button" class="button" data-edit-connection="' + escapeHtml(item.id) + '">详细</button><details class="interface-actions"><summary>更多</summary><button type="button" class="button" data-check-connection="' + escapeHtml(item.id) + '">验证令牌</button><button type="button" class="button" data-remove-connection="' + escapeHtml(item.id) + '">移除接口</button></details>')).join('');
+  const existing = [
+    { kind:'video', name:'视频连接', settings:state.settings, url:state.settings.baseUrl || 'https://sub.beibeihai.xyz', models:[] },
+    { kind:'image', name:'图片连接', settings:state.settings.image || {}, url:'https://sub.beibeihai.xyz', models:[state.settings.image?.imageModel].filter(Boolean) },
+    { kind:'text', name:'语言模型连接', settings:state.settings.text || {}, url:'https://sub.beibeihai.xyz/v1', models:[state.settings.text?.textModel].filter(Boolean) },
+  ].filter(item => item.settings.hasKey).map(item => row(item.name, item.kind, item.url, item.models, '令牌已保存', '<button type="button" class="button" data-legacy="' + item.kind + '">详细</button>')).join('');
+  $('#connections-list').innerHTML = saved || existing ? '<div class="interface-table-wrap"><table class="interface-table"><thead><tr><th>接口名称</th><th>类型</th><th>平台地址</th><th>模型</th><th>状态</th><th>操作</th></tr></thead><tbody>' + saved + existing + '</tbody></table></div>' : '<div class="center-empty"><h3>连接你的第一个模型接口</h3><p>为 Image、Nano 等模型分别配置令牌，生成时自动匹配。</p><button type="button" class="primary" id="center-empty-add">＋ 添加接口</button></div>';
+  if ($('#center-empty-add')) $('#center-empty-add').onclick = openCenterEditor;
+
+}
+$('#connections-center-button').onclick = () => action($('#connections-center-button'), async () => { await refreshCenter(); resetCenterEditor(); selectCenterTab('api'); $('#connections-center-message').textContent = ''; $('#connections-center').showModal(); });
+$('#connections-center-close').onclick = () => $('#connections-center').close();
+$('#center-refresh-models').onclick = () => action($('#center-refresh-models'), async () => { const result = await api('/api/connections/refresh', 'POST', {}); Object.assign(state, await api('/api/bootstrap')); centerOptions([...centerForm.elements.models.selectedOptions].map(option => option.value)); renderSettingsStatus(); $('#connections-center-message').textContent = result.message; });
+
+$('#center-legacy').onclick = () => showExistingConnection('#settings-form', renderSettings);
+$('#center-image-legacy').onclick = () => showExistingConnection('#image-settings-form', renderImageSettings);
+$('#center-text-legacy').onclick = () => showExistingConnection('#text-settings-form', renderTextSettings);
+if (centerForm?.elements?.kind) centerForm.elements.kind.onchange = () => centerOptions();
+$('#connection-editor-reset').onclick = resetCenterEditor;
+centerForm.onsubmit = event => { event.preventDefault(); action(centerForm.querySelector('[type=submit]'), async () => { try {
+  const f = centerForm.elements;
+  centerVerification.delete(f.id.value);
+  await api('/api/connections', 'PUT', { id: f.id.value, name: f.name.value, kind: f.kind.value, baseUrl: f.baseUrl.value, apiKey: f.apiKey.value, models: [...f.models.selectedOptions].map(option => option.value).concat(f.extraModels.value.split(/[\n,，]/).map(value => value.trim()).filter(Boolean)) });
+  f.apiKey.value = ''; await refreshCenter(); resetCenterEditor();
+  Object.assign(state, await api('/api/bootstrap')); renderSettingsStatus();
+  $('#connections-center-message').textContent = '接口已保存。选择绑定模型时将自动使用此接口。';
+} catch (error) { $('#center-editor-message').textContent = error.message; $('#center-editor-message').classList.add('error'); }
+}); };
+$('#connections-list').onclick = event => {
+  const button = event.target.closest('button'); if (!button) return;
+  if (button.dataset.legacy) { const map = { video: ['#settings-form', renderSettings], image: ['#image-settings-form', renderImageSettings], text: ['#text-settings-form', renderTextSettings] }; const item = map[button.dataset.legacy]; if (item) showExistingConnection(item[0], item[1]); return; }
+  const id = button.dataset.editConnection || button.dataset.checkConnection || button.dataset.removeConnection;
+  const item = centerConnections.find(item => item.id === id); if (!item) return;
+  if (button.dataset.editConnection) { centerForm.elements.id.value = item.id; centerForm.elements.name.value = item.name; centerForm.elements.kind.value = item.kind; centerForm.elements.apiKey.value = ''; centerForm.elements.extraModels.value = ''; $('#center-model-search').value = ''; centerOptions(item.models); centerForm.elements.baseUrl.value = item.baseUrl; $('#connection-editor-title').textContent = '编辑接口'; centerForm.hidden = false; $('#center-list-view').hidden = true; $('#center-editor-message').textContent = ''; centerForm.elements.name.focus(); loadCenterTokenModels(item); return; }
+  action(button, async () => {
+    if (button.dataset.checkConnection) { const status = button.closest('tr').querySelector('[data-connection-status]'); status.textContent = '正在验证…'; try { const result = await api('/api/connections/' + id + '/check', 'POST', {}); status.textContent = result.message; centerVerification.set(id, result.message); status.className = 'center-check-success'; button.textContent = '再次验证'; } catch (error) { status.textContent = error.message; centerVerification.set(id, error.message); status.className = 'center-check-error'; } }
+    else { if (button.dataset.confirmRemove !== 'yes') { button.dataset.confirmRemove = 'yes'; button.textContent = '确认移除'; const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'button'; cancel.textContent = '取消'; cancel.onclick = () => { button.dataset.confirmRemove = ''; button.textContent = '移除接口'; cancel.remove(); }; button.after(cancel); return; } await api('/api/connections/' + id, 'DELETE'); await refreshCenter(); Object.assign(state, await api('/api/bootstrap')); renderSettingsStatus(); resetCenterEditor(); $('#connections-center-message').textContent = '接口已移除。'; }
+  });
+};
+function selectCenterTab(tab) {
+  $('#center-api-panel').hidden = tab !== 'api'; $('#center-storage-panel').hidden = tab !== 'storage';
+  $('#center-api-tab').setAttribute('aria-selected', String(tab === 'api')); $('#center-storage-tab').setAttribute('aria-selected', String(tab === 'storage'));
+  if (tab === 'storage') { renderStorageSettings(); const form = $('#storage-form'); $('#center-storage-panel').append(form); $('#close-storage').hidden = true; }
+}
+function openCenterEditor() { resetCenterEditor(); centerForm.hidden = false; $('#center-list-view').hidden = true; centerForm.elements.name.focus(); }
+async function loadCenterTokenModels(item) {
+  centerTokenModels = []; centerOptions(item.models);
+  $('#center-editor-message').textContent = '正在用此接口令牌查询模型…';
+  try {
+    const models = await api('/api/connections/' + encodeURIComponent(item.id) + '/models');
+    if (centerForm.hidden || centerForm.elements.id.value !== item.id) return;
+    const selected = [...centerForm.elements.models.selectedOptions].map(option => option.value);
+    centerTokenModels = models; centerOptions(selected); centerForm.elements.baseUrl.value = item.baseUrl;
+    $('#center-editor-message').textContent = '此令牌返回 ' + models.length + ' 个模型。勾选模型可绑定此接口；目录可见不代表已验证生成权限。';
+    $('#center-editor-message').classList.remove('error');
+  } catch (error) {
+    if (centerForm.hidden || centerForm.elements.id.value !== item.id) return;
+    $('#center-editor-message').textContent = '模型查询失败：' + error.message;
+    $('#center-editor-message').classList.add('error');
+  }
+}
+function renderCenterModelChoices() {
+  if (!centerForm?.elements?.models) return;
+  const query = ($('#center-model-search').value || '').toLowerCase();
+  const options = [...centerForm.elements.models.options];
+  $('#center-model-count').textContent = '已选 ' + options.filter(option => option.selected).length + ' 个';
+  $('#center-model-choices').innerHTML = options.filter(option => option.value.toLowerCase().includes(query)).map(option => {
+    const owner = centerConnections.find(item => item.kind === centerForm.elements.kind.value && item.id !== centerForm.elements.id.value && item.models.includes(option.value));
+    return '<label class="center-model-choice"><input type="checkbox" value="' + escapeHtml(option.value) + '"' + (option.selected ? ' checked' : '') + (owner ? ' disabled' : '') + '><span>' + escapeHtml(option.value) + (owner ? '<small>已绑定：' + escapeHtml(owner.name) + '</small>' : '') + '</span></label>';
+  }).join('') || '<p class="honest-note">没有找到模型，可刷新目录或在下方补充模型名称。</p>';
+}
+function showExistingConnection(selector, render) {
+  const host = $('#center-existing-editor');
+  host.hidden = false; $('#connections-list').hidden = true; $('#center-toolbar-back')?.remove();
+  const back = document.createElement('button'); back.id = 'center-toolbar-back'; back.type = 'button'; back.className = 'button'; back.textContent = '← 返回接口列表'; host.before(back);
+  for (const child of [...host.children]) { const dialog = child.dataset.originalDialog; if (dialog) $(dialog).append(child); }
+  const form = $(selector); form.dataset.originalDialog = '#' + form.parentElement.id; render(); host.append(form);
+  form.querySelector('.token-model-list')?.remove();
+  const modelList = document.createElement('section'); modelList.className = 'token-model-list';
+  modelList.innerHTML = '<h3>此令牌的模型</h3><p role="status">正在查询模型…</p>';
+  form.append(modelList);
+  const kind = selector === '#settings-form' ? 'video' : selector === '#image-settings-form' ? 'image' : 'text';
+  api('/api/existing-connections/' + kind + '/models').then(models => {
+    modelList.innerHTML = '<h3>此令牌的模型（' + models.length + '）</h3><div class="center-model-tags">' + models.map(model => '<span>' + escapeHtml(model.name) + '</span>').join('') + '</div><p class="honest-note">' + (models.length ? '目录可见不代表已验证生成权限。' : '平台未返回模型。') + '</p>';
+  }).catch(error => { modelList.querySelector('p').textContent = '模型查询失败：' + error.message; });
+  const close = form.querySelector('.dialog-heading .icon-button');
+  back.onclick = close.onclick = () => { $(form.dataset.originalDialog).append(form); host.hidden = true; $('#connections-list').hidden = false; back.remove(); refreshCenter().catch(error => toast(error.message, true)); };
+}
+$('#center-api-tab').onclick = () => selectCenterTab('api');
+$('#center-storage-tab').onclick = () => selectCenterTab('storage');
+$('#center-add').onclick = openCenterEditor;
+$('#center-editor-cancel').onclick = resetCenterEditor;
+$('#center-model-search').oninput = renderCenterModelChoices;
+$('#center-model-choices').onchange = event => { const option = [...centerForm.elements.models.options].find(option => option.value === event.target.value); if (option) option.selected = event.target.checked; $('#center-model-count').textContent = '已选 ' + [...centerForm.elements.models.selectedOptions].length + ' 个'; };
 init();

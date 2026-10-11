@@ -6,15 +6,16 @@ import { tmpdir } from 'node:os';
 import { Store } from '../lib/store.mjs';
 import { createProject, draftPlan, defaultGraph, validateGraph, normalizeScenes, updateProject, exportProject, importProject } from '../lib/workflow.mjs';
 
-test('旧工程补齐空分组，新分组只保存有效成员和名称且拒绝重复归属', () => {
+test('旧工程补齐空分组，新分组保存有效成员并允许卡片属于多个分组', () => {
   const nodes=['a','b','c','d'].map(id=>({id,kind:'text'})), base={nodes,links:[]};
   assert.deepEqual(validateGraph(base).groups,[]);
   const group={id:'group-one',label:'  人物与场景  ',nodeIds:['a','b','a'],privateField:'不保存'};
   assert.deepEqual(validateGraph({...base,groups:[group]}).groups,[{id:'group-one',label:'人物与场景',nodeIds:['a','b']}]);
   for (const groups of [
     {},[null],[{...group,nodeIds:['a']}],[{...group,nodeIds:['a','missing']}],
-    [{...group,id:'a'}],[group,group],[group,{id:'group-two',nodeIds:['b','c']}],
+    [{...group,id:'a'}],[group,group],
   ]) assert.throws(()=>validateGraph({...base,groups}), /分组|分组编号/);
+  assert.equal(validateGraph({...base,groups:[group,{id:'group-two',nodeIds:['b','c']}]}).groups.length,2);
   assert.equal(validateGraph({...base,groups:[{...group,label:'名称'.repeat(50)}]}).groups[0].label.length,80);
 });
 

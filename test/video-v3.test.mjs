@@ -14,12 +14,30 @@ import { PLATFORM, DEFAULT_CONNECTION, VIDEO_REQUEST_MODE, LEGACY_PLATFORM, LEGA
   LEGACY_VIDEO_REQUEST_MODE, videoBaseUrl, catalogForVideoModelIds, buildVideoRequest,
   normalizeVideoV3Task, loadCatalog, checkConnection, submitVideo, pollVideo, UncertainSubmission } from '../lib/providers.mjs';
 import { downloadPublicVideo } from '../lib/media.mjs';
+test('文档错误字段和请求编号可定位且脱敏，失败无原因时不猜测原因', async () => {
+  const connection = { ...DEFAULT_CONNECTION, apiKey: 'diagnostic-secret' };
+  await assert.rejects(loadCatalog(connection, async () => new Response(JSON.stringify({
+    code: 'invalid_parameter', message: '拒绝 diagnostic-secret', param: 'duration', request_id: 'req_123',
+  }), { status: 422 })), error => {
+    assert.match(error.message, /invalid_parameter/);
+    assert.match(error.message, /duration/);
+    assert.match(error.message, /req_123/);
+    assert.doesNotMatch(error.message, /diagnostic-secret/);
+    return true;
+  });
+  const failed = normalizeVideoV3Task({ id: 'task_123', status: 'failed',
+    error: { code: 'unknown_failure', param: 'content[1].video_url' } });
+  assert.match(failed.message, /上游未提供具体失败原因/);
+  assert.match(failed.message, /content\[1\]\.video_url/);
+  assert.equal(failed.errorCode, 'unknown_failure');
+});
 import { videoParameters, videoParameterControls, videoEstimateText, videoPricingNote } from '../public/video-parameters.js';
 import { resolveSceneReferences, referenceLabel } from '../public/reference-model.js';
 import { insertReferenceMention, remapPromptMentions, invalidPromptMentions } from '../public/prompt-mentions.js';
 
+const dolaIds = ['dola-seedance-2.0-903（次）', 'dola-seedance-2.5-30010（次）'];
 const ids = ['seedance-2.0-933-720P（秒）', 'seedance-2.0-fast-933-720P（次）',
-  'seedance-2.0-mini-903-720P（次）', 'seedance-2.5-301010-1K（秒）', 'minimax-h3-933-2K（次）'];
+  'seedance-2.0-mini-903-720P（次）', 'seedance-2.5-301010-1K（秒）', 'minimax-h3-933-2K（次）', ...dolaIds];
 const catalog = catalogForVideoModelIds(ids);
 const settings = { ...DEFAULT_CONNECTION, apiKey: 'v3-original-test-secret' };
 const job = { model: ids[1], duration: 5, resolution: '720p', ratio: '16:9',
@@ -59,14 +77,15 @@ async function setup(t, fetcher) {
     } };
 }
 
-test('新版模型目录使用当前密钥，仅保留完整模型 ID；所有价格未知而非零元', async () => {
+test('新版模型目录使用当前密钥，仅保留完整模型 ID；无有效公开报价时不估价', async () => {
   let requests = 0;
   const result = await loadCatalog({ ...settings, baseUrl: PLATFORM + '/api/v3/' }, async (url, options) => {
-    requests++; assert.equal(url, PLATFORM + '/v1/models'); assert.equal(options.method, undefined);
-    assert.equal(options.headers.Authorization, 'Bearer ' + settings.apiKey); assert.equal(options.redirect, 'error');
+    requests++; assert.equal(options.method, undefined); assert.equal(options.redirect, 'error');
+    if (url.endsWith('/v1/models')) assert.equal(options.headers.Authorization, 'Bearer ' + settings.apiKey);
+    else { assert.equal(url, PLATFORM + '/api/v1/model-plaza'); assert.deepEqual(options.headers, { Accept: 'application/json' }); }
     return reply({ data: [{ id: ids[2], price: 0.1 }, { id: 'grok-video' }, { id: ids[2] }, { id: ids[0] }] });
   });
-  assert.deepEqual(result.map(model => model.name), [ids[2], ids[0]]); assert.equal(requests, 1);
+  assert.deepEqual(result.map(model => model.name), [ids[2], ids[0]]); assert.equal(requests, 2);
   for (const model of result) {
     assert.equal(model.requestMode, VIDEO_REQUEST_MODE); assert.equal(model.pricingAvailable, false);
     assert.ok(model.tiers.every(tier => tier.price === null)); assert.equal(model.referenceSupport.verified, false);
@@ -75,6 +94,36 @@ test('新版模型目录使用当前密钥，仅保留完整模型 ID；所有�
   assert.equal(result[0].defaultResolution, '480p'); assert.equal(result[0].defaultDuration, 5);
   const check = await checkConnection(settings, async () => reply({ data: [{ id: ids[1] }] }));
   assert.equal(check.selectedModelVisible, false); assert.equal(check.readable, true);
+});
+
+test('两个 dola 视频模型按密钥权限显示，表单可选且提交完整名称，重启保留选择', async t => {
+  const currentCatalog = await loadCatalog(settings, async () => reply({ data: [
+    ...ids.map(id => ({ id })), { id: dolaIds[0] }, { id: 'image-2' }, { id: 'gpt-4.1' },
+  ] }));
+  assert.deepEqual(currentCatalog.map(model => model.name), ids);
+  const restricted = await loadCatalog(settings, async () => reply({ data: [{ id: dolaIds[1] }] }));
+  assert.deepEqual(restricted.map(model => model.name), [dolaIds[1]]);
+  const check = await checkConnection(settings, async () => reply({ data: ids.map(id => ({ id })) }));
+  assert.equal(check.videoModelCount, 7);
+  const ctx = await setup(t, async (_url, options) => {
+    const request = JSON.parse(options.body);
+    assert.ok(dolaIds.includes(request.model));
+    assert.equal(request.duration, 5); assert.equal(request.resolution, '720p'); assert.equal(request.ratio, '16:9');
+    return reply({ id: 'dola-task-' + dolaIds.indexOf(request.model), status: 'queued' });
+  });
+  for (const model of currentCatalog.filter(model => dolaIds.includes(model.name))) {
+    const p = videoParameters(model);
+    const controls = videoParameterControls(p, currentCatalog);
+    assert.equal(controls.videoModel.value, model.name);
+    assert.ok(controls.videoModel.options.some(option => option.value === model.name));
+    await ctx.store.update(ctx.project.id, project => { project.scenes[0].videoModel = model.name; return touch(project); });
+    const task = await ctx.jobs.start(ctx.project.id, { ...ctx.input, model: model.name, operationId: 'dola-operation-' + dolaIds.indexOf(model.name) }, currentCatalog);
+    await until(() => !ctx.jobs.busy.size && ctx.store.state.jobs.find(job => job.id === task.id)?.state === 'queued');
+    assert.equal(ctx.store.state.jobs.find(job => job.id === task.id).model, model.name);
+    await ctx.store.saveSettings({ ...settings, videoModel: model.name });
+    await ctx.store.migrateVideoSettings();
+    assert.equal((await ctx.store.settings()).videoModel, model.name);
+  }
 });
 
 test('报价未知的模型仍可选择参数；两个入口均显示待确认费用，旧模型需重新选择', () => {
@@ -118,10 +167,11 @@ test('直连视频端点仍可选，并用于模型查询、创建和查询任�
   });
   assert.deepEqual(calls.map(call => [call.method || 'GET', call.url]), [
     ['GET', direct + '/v1/models'],
+    ['GET', PLATFORM + '/api/v1/model-plaza'],
     ['POST', direct + '/api/v3/contents/generations/tasks'],
     ['GET', direct + '/api/v3/contents/generations/tasks/direct-task'],
   ]);
-  assert.match(calls[1].requestId, /^[0-9a-f-]{36}$/);
+  assert.match(calls[2].requestId, /^[0-9a-f-]{36}$/);
 });
 
 test('整数秒数、分辨率、比例、文本及完整模型名不合法时在发送前拒绝', async () => {
@@ -408,7 +458,86 @@ test('目录刷新或新密钥查询失败后不沿用旧权限目录，原任�
   assert.equal((await send({ apiKey: 'first-key' })).status, 200);
   assert.equal((await (await fetch(url + '/api/bootstrap')).json()).catalog.length, 1);
   fail = true; assert.equal((await send({ apiKey: 'second-key' })).status, 200);
-  const current = await (await fetch(url + '/api/bootstrap')).json(); assert.equal(current.catalog.length, 0); assert.match(current.catalogError, /未读取成功/);
+  const current = await (await fetch(url + '/api/bootstrap')).json(); assert.equal(current.catalog.length, 0); assert.match(current.catalogError, /读取失败/);
+});
+
+test('HTTP 生成前强制同步报价，价格变化与未知转已知先拦截，核对后才提交且重试不重计价', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'jingce-video-fresh-quote-'));
+  let rate = 0.5, directoryReads = 0, submissions = 0;
+  const app = await createStudio({ root, imageCatalog: [], textCatalog: [], tools: { ready: false },
+    videoFetcher: async url => {
+      if (url.endsWith('/v1/models')) { directoryReads += 1; return reply({ data: [{ id: ids[0] }] }); }
+      return reply({ code: 0, data: { groups: [{ name: '普通组', models: [
+        { name: ids[0], pricing: { billing_mode: 'video', per_request_price: rate } },
+      ] }] } });
+    }, integrations: { submit: async () => { submissions += 1; return { taskId: 'fresh-quote-task', state: 'queued' }; } },
+  });
+  t.after(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
+  const url = await app.start(0), bootstrap = await (await fetch(url + '/api/bootstrap')).json();
+  const send = (route, body, method = 'POST') => fetch(url + route, { method,
+    headers: { 'Content-Type': 'application/json', 'X-Studio-Token': bootstrap.token }, body: JSON.stringify(body) });
+  assert.equal((await send('/api/settings', { apiKey: 'quote-test-key', videoModel: ids[0] }, 'PUT')).status, 200);
+  const project = await (await send('/api/projects', { title: '生成前报价核对' })).json();
+  await send('/api/projects/' + project.id, { revision: project.revision,
+    scenes: [{ id: 'quote-scene', videoPrompt: '原创山间晨光', duration: 5 }] }, 'PATCH');
+  const input = { sceneId: 'quote-scene', model: ids[0], duration: 5, resolution: '720p', ratio: '16:9',
+    requestMode: VIDEO_REQUEST_MODE, operationId: 'quote-operation', quote: { price: 2.5, currency: 'CNY' } };
+  const readsBeforeSubmission = directoryReads;
+  rate = 1;
+  const changed = await send('/api/projects/' + project.id + '/batches', input);
+  assert.equal(changed.status, 409); assert.match((await changed.json()).error, /报价已更新/);
+  assert.ok(directoryReads > readsBeforeSubmission);
+  assert.equal(submissions, 0); assert.equal(app.store.state.jobs.length, 0);
+  const known = await send('/api/projects/' + project.id + '/batches', { ...input, quote: { price: null, currency: 'CNY' } });
+  assert.equal(known.status, 409);
+  assert.equal(submissions, 0); assert.equal(app.store.state.jobs.length, 0);
+  const confirmed = await send('/api/projects/' + project.id + '/batches', { ...input, quote: { price: 5, currency: 'CNY' } });
+  assert.equal(confirmed.status, 202); const batch = await confirmed.json();
+  await until(() => submissions === 1 && !app.jobs.busy.size);
+  assert.equal(batch.jobs[0].estimate, 5);
+  rate = 99;
+  const readsBeforeRetry = directoryReads;
+  const retry = await send('/api/projects/' + project.id + '/batches', input);
+  assert.equal(retry.status, 202); const existing = await retry.json();
+  assert.equal(existing.jobs[0].id, batch.jobs[0].id); assert.equal(existing.jobs[0].estimate, 5);
+  assert.equal(submissions, 1); assert.equal(directoryReads, readsBeforeRetry);
+});
+
+test('HTTP 提交前目录已核对，入队期间切换默认连接也使用对应目录的原密钥', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'jingce-video-catalog-connection-'));
+  const submissions = [];
+  const app = await createStudio({ root, imageCatalog: [], textCatalog: [], tools: { ready: false },
+    videoFetcher: async (url, options) => url.endsWith('/v1/models')
+      ? reply({ data: [{ id: options.headers.Authorization === 'Bearer original-key' ? ids[1] : ids[2] }] })
+      : reply({ groups: [] }),
+    integrations: { submit: async (savedSettings, job) => {
+      submissions.push({ key: savedSettings.apiKey, model: job.model });
+      return { taskId: 'paired-connection-task', state: 'queued' };
+    } },
+  });
+  t.after(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
+  const url = await app.start(0), bootstrap = await (await fetch(url + '/api/bootstrap')).json();
+  const send = (route, body, method = 'POST') => fetch(url + route, { method,
+    headers: { 'Content-Type': 'application/json', 'X-Studio-Token': bootstrap.token }, body: JSON.stringify(body) });
+  assert.equal((await send('/api/settings', { apiKey: 'original-key', videoModel: ids[1] }, 'PUT')).status, 200);
+  const project = await (await send('/api/projects', { title: '目录连接配对' })).json();
+  await send('/api/projects/' + project.id, { revision: project.revision,
+    scenes: [{ id: 'paired-scene', videoPrompt: '原创海边镜头', duration: 5 }] }, 'PATCH');
+  const startBatch = app.jobs.startBatch.bind(app.jobs);
+  t.mock.method(app.jobs, 'startBatch', async (projectId, input, catalog, catalogSettings) => {
+    // Hold the handoff until another settings save has committed.
+    await app.store.saveSettings({ ...await app.store.settings(), apiKey: 'replacement-key', videoModel: ids[2] });
+    return startBatch(projectId, input, catalog, catalogSettings);
+  });
+  const response = await send('/api/projects/' + project.id + '/jobs', { sceneId: 'paired-scene', model: ids[1],
+    duration: 5, resolution: '720p', ratio: '16:9', requestMode: VIDEO_REQUEST_MODE });
+  assert.equal(response.status, 202);
+  const job = await response.json();
+  await until(() => submissions.length === 1 && !app.jobs.busy.size);
+  assert.deepEqual(submissions, [{ key: 'original-key', model: ids[1] }]);
+  assert.equal((await app.store.videoTaskSettings(app.store.state.jobs.find(value => value.id === job.id))).apiKey, 'original-key');
+  assert.equal((await app.store.settings()).apiKey, 'replacement-key');
+  assert.doesNotMatch(JSON.stringify(job), /original-key|replacement-key/);
 });
 
 test('彻底删除已结束工程时同时清理对应的服务器私有任务密钥快照', async t => {
