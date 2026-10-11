@@ -1116,7 +1116,7 @@ function handleAssetClick(event) {
         adoptRemote(project);
         if (deleting && editedDuringRequest) changeReferences(() => detachAssetReferences(state.project, id));
         if (!deleting) state.showDeletedAssets = false;
-        canvas.reset(); renderAssets(); renderResults(); renderImageReferences(); canvas.render(); 
+        canvas.reset(); renderAssets(); renderResults(); renderImageReferences(); canvas.render();
         if (state.view === 'videos') renderScenes();
       }
       toast(deleting ? '素材已移到“已删除素材”，可恢复。' : '素材已恢复，可重新选择或放到画布。');
@@ -1207,20 +1207,31 @@ function renderSettingsStatus() {
 }
 function renderStorageSettings() {
   const storage = state.settings.storage || {};
+  $('#storage-provider').value = storage.provider || 'cos';
+  $('#storage-endpoint').value = storage.endpoint || '';
+  updateStorageProvider();
   $('#storage-bucket').value = storage.bucket || '';
   $('#storage-region').value = storage.region || 'ap-guangzhou';
   $('#storage-prefix').value = storage.prefix || 'jingce';
   $('#storage-expires').value = String(storage.expiresHours || 72);
   $('#storage-enabled').checked = Boolean(storage.enabled);
-  $('#storage-key-state').textContent = storage.hasCredentials ? '已保存腾讯云密钥。密钥只保存在本机，留空可保留原密钥。' : '尚未保存腾讯云密钥。请在本机填写，不要发送到聊天中。';
+  $('#storage-key-state').textContent = storage.hasCredentials ? '已保存云存储密钥，留空可保留。密钥仅保存在服务器。' : '尚未保存云存储密钥。';
   $('#storage-message').textContent = storage.message || '';
   $('#storage-message').classList.toggle('error', Boolean(storage.enabled && !storage.ready));
 }
+function updateStorageProvider() {
+  const r2 = $('#storage-provider').value === 'r2';
+  $('#storage-endpoint-label').hidden = !r2;
+  $('#storage-endpoint').required = r2;
+  $('#storage-region-label').hidden = r2;
+  $('#storage-region').required = !r2;
+}
+$('#storage-provider').onchange = updateStorageProvider;
 $('#storage-button').onclick = () => { renderStorageSettings(); $('#storage-dialog').showModal(); };
 $('#close-storage').onclick = () => $('#storage-dialog').close();
 $('#storage-form').onsubmit = event => { event.preventDefault(); action($('#storage-form [type=submit]'), async () => {
   const form = $('#storage-form');
-  state.settings.storage = await api('/api/storage/settings', 'PUT', { bucket: form.elements.bucket.value, region: form.elements.region.value,
+  state.settings.storage = await api('/api/storage/settings', 'PUT', { provider: form.elements.provider.value, endpoint: form.elements.endpoint.value, bucket: form.elements.bucket.value, region: form.elements.provider.value === 'r2' ? 'auto' : form.elements.region.value,
     prefix: form.elements.prefix.value, expiresHours: Number(form.elements.expires.value), enabled: form.elements.enabled.checked,
     secretId: form.elements.secretId.value, secretKey: form.elements.secretKey.value });
   form.elements.secretId.value = ''; form.elements.secretKey.value = ''; renderSettingsStatus(); renderStorageSettings(); renderScenes(); canvas.render();
@@ -1228,13 +1239,13 @@ $('#storage-form').onsubmit = event => { event.preventDefault(); action($('#stor
 }); };
 $('#storage-test').onclick = () => action($('#storage-test'), async () => {
   const form = $('#storage-form');
-  if (form.elements.secretId.value || form.elements.secretKey.value || !state.settings.storage?.hasCredentials) {
-    state.settings.storage = await api('/api/storage/settings', 'PUT', { bucket: form.elements.bucket.value, region: form.elements.region.value,
+  {
+    state.settings.storage = await api('/api/storage/settings', 'PUT', { provider: form.elements.provider.value, endpoint: form.elements.endpoint.value, bucket: form.elements.bucket.value, region: form.elements.provider.value === 'r2' ? 'auto' : form.elements.region.value,
       prefix: form.elements.prefix.value, expiresHours: Number(form.elements.expires.value), enabled: true,
       secretId: form.elements.secretId.value, secretKey: form.elements.secretKey.value });
     form.elements.secretId.value = ''; form.elements.secretKey.value = '';
   }
-  const result = await api('/api/storage/test', 'POST', {}); $('#storage-message').classList.remove('error'); $('#storage-message').textContent = result.message; renderStorageSettings();
+  const result = await api('/api/storage/test', 'POST', {}); renderSettingsStatus(); renderStorageSettings(); $('#storage-message').classList.remove('error'); $('#storage-message').textContent = result.message;
 });
 
 function renderSettings() {
