@@ -5,6 +5,8 @@ import { canvasLinkReference, sceneReferenceCycle, resolveSceneReferences, syncP
 import { updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions } from './prompt-mentions.js';
 import { createReferencePromptEditor } from './prompt-editor.js';
 import { referenceRequestIssue } from './reference-api.js';
+import { modelLinkIssue } from './model-link-rules.js';
+import { capabilitySummary } from './model-capabilities.js';
 import { videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote } from './video-parameters.js';
 import { IMAGE_RATIOS, IMAGE_QUALITIES, IMAGE_STYLES, IMAGE_CONTROL_NOTE, IMAGE_GENERATION_COUNT_MAX, IMAGE_ACTIVE_STATES, isImageGenerationNode, normalizeImageConfig, resolveImageInputs, imageRequestIssue, syncImageCardJobs, imageModelReferenceLimit, imageEstimate, imageEstimateText } from './image-parameters.js';
 import { AI_MODES, normalizeAiConfig } from './ai-text.js';
@@ -14,6 +16,29 @@ const uid = () => crypto.randomUUID();
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const coordinate = value => Math.round(clamp(value, -WORLD_LIMIT, WORLD_LIMIT));
+
+function clearCanvasSpace(graph, point, width, height) {
+  const position = { x: coordinate(point.x), y: coordinate(point.y) };
+  for (let attempt = 0; attempt <= graph.nodes.length; attempt++) {
+    const area = { x: position.x - 30, y: position.y - 30, width: width + 60, height: height + 60 };
+    const blockers = graph.nodes.filter(node => intersectsRect(area, node));
+    if (!blockers.length) return position;
+    const nextY = coordinate(Math.max(...blockers.map(node => node.y + node.height + 70)));
+    if (nextY > position.y) position.y = nextY;
+    else {
+      position.x = coordinate(Math.min(...blockers.map(node => node.x)) - width - 70);
+      position.y = coordinate(point.y);
+    }
+  }
+  return position;
+}
+
+export function createAssetCanvasNode(asset, graph, point = { x: 0, y: 0 }) {
+  return { id: uid(), kind: asset.kind, label: asset.name.slice(0, 80),
+    ...clearCanvasSpace(graph, point, CARD_WIDTH, CARD_HEIGHT), width: CARD_WIDTH, height: CARD_HEIGHT,
+    status: 'uploaded', note: '', assetId: asset.id, sceneId: '', assetName: asset.name };
+}
+
 const interactive = target => Boolean(target?.closest('input,textarea,select,button,a,video,audio,[contenteditable="true"]'));
 const editing = target => Boolean(target?.closest('input:not([readonly]),textarea,select,[contenteditable="true"]'));
 const playing = element => [...element.querySelectorAll('video,audio')].some(media => !media.paused && !media.ended);
@@ -99,7 +124,6 @@ export function createInfiniteCanvas(bridge) {
     try { window.localStorage?.setItem(overviewKey, String(overviewCollapsed)); } catch {}
   });
   let projectId = '', selection = new Set(), selectedLink = '', connectionFrom = '', connectionTargetId = '', tool = 'select', spaceDown = false;
-  let selectionToolsPoint = null;
   let interaction = null, hoverPoint = null, contextPoint = null, insertionIndex = 0, suppressClick = false, suppressContextMenuUntil = 0;
   let undo = [], redo = [], editBefore = null, relinkNodeId = '', panelPoint = null, minimapBounds = null;
   let activeCoverCard = null, coverHideTimer = 0;
@@ -330,16 +354,6 @@ export function createInfiniteCanvas(bridge) {
     const count = selection.size, active = Boolean(count || selectedLink || connectionFrom);
     const selectionTools = $('#canvas-selection-tools');
     selectionTools.hidden = !active;
-    if (active && selectionToolsPoint) {
-      // Keep the actions close to the point where the marquee started, while
-      // clamping them inside the visible canvas when the drag began near an edge.
-      const gap = 8, width = selectionTools.offsetWidth || 280, height = selectionTools.offsetHeight || 38;
-      const maxX = Math.max(gap, viewport.clientWidth - width - gap);
-      const maxY = Math.max(gap, viewport.clientHeight - height - gap);
-      selectionTools.style.left = `${Math.min(Math.max(gap, selectionToolsPoint.x + gap), maxX)}px`;
-      selectionTools.style.top = `${Math.min(Math.max(gap, selectionToolsPoint.y + gap), maxY)}px`;
-      selectionTools.style.bottom = 'auto';
-    }
     $('#selection-note').textContent = connectionFrom ? (connectionTargetId ? '已吸附，松开即可连接；Esc 取消' : '靠近目标卡片自动吸附，或点击左端口；Esc 取消') : selectedLink ? '已选中连接' : `已选择 ${count} 张卡片`;
     $('#duplicate-selection').disabled = !count;
     $('#remove-selection').disabled = !count && !selectedLink;
@@ -380,16 +394,7 @@ export function createInfiniteCanvas(bridge) {
     return true;
   }
   function clearSpace(point, width, height) {
-    const position = { x: coordinate(point.x), y: coordinate(point.y) };
-    for (let attempt = 0; attempt <= graph().nodes.length; attempt++) {
-      const area = { x: position.x - 30, y: position.y - 30, width: width + 60, height: height + 60 };
-      const blockers = graph().nodes.filter(node => intersectsRect(area, node));
-      if (!blockers.length) break;
-      const nextY = coordinate(Math.max(...blockers.map(node => node.y + node.height + 70)));
-      if (nextY <= position.y) break;
-      position.y = nextY;
-    }
-    return position;
+    return clearCanvasSpace(graph(), point, width, height);
   }
   function baseNode(kind, label, point, width = CARD_WIDTH, height = CARD_HEIGHT) {
     return { id: uid(), kind, label, ...place(point, width, height), width, height, status: 'pending', note: '',
@@ -398,7 +403,7 @@ export function createInfiniteCanvas(bridge) {
   function addText(point, note = '') {
     if (!ensureCapacity()) return;
     let node;
-    changeGraph(() => { node = baseNode('text', '灵感便签', point); node.note = note.slice(0, 2000);
+    changeGraph(() => { node = baseNode('text', '灵感便签', point); node.note = note;
       graph().nodes.push(node); selection = new Set([node.id]); selectedLink = ''; });
     if (!note) { const input = cards.get(node.id)?.querySelector('[data-node-field="note"]'); input?.focus(); }
     return node;
@@ -491,9 +496,9 @@ export function createInfiniteCanvas(bridge) {
     } catch (error) { report(error); }
     return created;
   }
-  function addAsset(asset, point) {
+  function addAsset(asset, point, { allowRelink = true, avoidOverlap = false } = {}) {
     if (!project() || !asset || !project().assets.some(item => !item.deletedAt && item.id === asset.id)) return;
-    if (relinkNodeId) {
+    if (allowRelink && relinkNodeId) {
       const target = graph().nodes.find(node => node.id === relinkNodeId);
       if (target && target.kind !== asset.kind) return bridge.toast('请选择与卡片类型相同的素材。', true);
       if (target && target.assetId !== asset.id) {
@@ -519,7 +524,8 @@ export function createInfiniteCanvas(bridge) {
     if (!ensureCapacity()) return;
     let node;
     changeGraph(() => {
-      node = baseNode(asset.kind, asset.name.slice(0, 80), point);
+      node = avoidOverlap ? createAssetCanvasNode(asset, graph(), place(point, CARD_WIDTH, CARD_HEIGHT))
+        : baseNode(asset.kind, asset.name.slice(0, 80), point);
       Object.assign(node, { assetId: asset.id, assetName: asset.name, status: 'uploaded' });
       graph().nodes.push(node); selection = new Set([node.id]); selectedLink = '';
     });
@@ -631,7 +637,7 @@ export function createInfiniteCanvas(bridge) {
     const previewId = cards.get(node.id)?.dataset.previewAsset;
     const preview = assets.find(asset => asset.id === previewId) || chosen || assets.at(-1);
     const references = resolveSceneReferences(project(), scene), invalid = invalidPromptMentions(scene, references);
-    const referenceIssue = referenceRequestIssue(p.model, references, { allowLocalUpload: Boolean(state().settings.storage?.ready) });
+    const referenceIssue = referenceRequestIssue(p.model, references, { allowLocalUpload: Boolean(state().settings.storage?.ready),assets:project().assets });
     const pending = state().videoOperations?.has(project().id + ':' + scene.id);
     const disabled = submitting || !pending && (!state().settings.hasKey || !p.tier || Boolean(referenceIssue) || invalid.length > 0 || !scene.videoPrompt.trim());
     const label = submitting ? '提交中…' : pending ? '核对上次提交 ↗' : invalid.length ? '请修复提示词引用' : referenceIssue ? '请完善参考设置'
@@ -667,7 +673,7 @@ export function createInfiniteCanvas(bridge) {
     return `<div class="canvas-cover shot-preview">${preview ? mediaMarkup(preview, 'canvas-media', true) : `<div class="shot-preview-empty"><span>▷</span><p>${active ? '视频生成中' : '等待生成视频'}</p></div>`}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div></div>
       <div class="canvas-hover-details"><div class="canvas-details-content"><div class="shot-fields"><label class="reference-prompt-editor">视频提示词 <span class="prompt-at-hint">输入 @ 选择素材</span><textarea class="shot-prompt" data-reference-prompt data-shot-field="videoPrompt" aria-label="${escapeHtml(scene.title)}视频提示词" rows="3" maxlength="4000" placeholder="描述主体、动作、场景、画面运动和画面风格…">${escapeHtml(scene.videoPrompt)}</textarea><div class="reference-mention-menu" role="listbox" aria-label="可引用的素材" hidden></div></label>
       ${referenceMarkup(scene)}<div class="shot-params">${Object.entries(controls).map(([field, config]) => `<label>${config.label}<select data-shot-field="${field}" aria-label="${escapeHtml(scene.title)}${config.label}"${config.disabled ? ' disabled' : ''}>${config.options.map(item => option(item.value, item.label, config.value)).join('')}</select></label>`).join('')}</div>
-      <div class="shot-estimate"><strong>${escapeHtml(estimate)}</strong><small>${escapeHtml(p.model?.name || '选择视频模型后显示接口参数')} · ${escapeHtml(p.ratio || '模型默认比例')} · ${escapeHtml(p.resolution || '模型默认画质')} · ${escapeHtml(videoPricingNote(p))}</small></div>
+      <div class="shot-estimate"><strong>${escapeHtml(estimate)}</strong><small>${escapeHtml(p.model?.name || '选择视频模型后显示接口参数')} · ${escapeHtml(p.ratio || '模型默认比例')} · ${escapeHtml(p.resolution || '模型默认画质')} · ${escapeHtml(videoPricingNote(p))}</small><button type="button" class="text-button" data-model-capability="video" data-capability-model="${escapeHtml(p.model?.name || '')}">查看 / 补充模型能力</button></div>
       <button class="primary full shot-generate" data-card-action="generate"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button><p class="shot-hint">${escapeHtml(hint)}</p>
       ${assets.length ? `<div class="shot-candidates"><div><strong>候选视频 · ${assets.length}</strong><button data-card-action="expand-candidates">展开对比 ↗</button></div><select data-preview-candidate aria-label="${escapeHtml(scene.title)}预览候选视频">${assets.map((asset, index) => option(asset.id, `${asset.variantIndex || index + 1} · ${asset.name}${asset.id === scene.videoAssetId ? ' ✓ 当前结果' : ''}`, preview?.id)).join('')}</select><p class="shot-hint">从本卡右侧端口拉线到另一个视频卡片，即可参考当前预览视频。</p><div class="canvas-node-footer"><button data-card-action="select-candidate" data-asset-id="${escapeHtml(preview?.id || '')}"${preview?.id === scene.videoAssetId ? ' disabled' : ''}>${preview?.id === scene.videoAssetId ? '✓ 当前结果' : '设为当前结果'}</button>${preview ? `<button data-card-action="place-asset" data-asset-id="${escapeHtml(preview.id)}">放到画布作为参考</button><a href="/api/assets/${encodeURIComponent(preview.id)}?download=1" download>下载 ↓</a>` : ''}</div></div>` : ''}
       <div class="canvas-node-footer">${preview ? '<button data-card-action="preview-cover">放大预览 ↗</button>' : '<button data-card-action="details">视频详情 ↗</button>'}</div></div></div></div>`;
@@ -692,7 +698,7 @@ export function createInfiniteCanvas(bridge) {
     const previewId = cards.get(node.id)?.dataset.previewAsset;
     const preview = candidates.find(item => item.id === previewId) || asset || candidates.at(-1) || null;
     const submitting = state().submitting.has('image:'+node.id), active = job && IMAGE_ACTIVE_STATES.has(job.state);
-    const issue = imageRequestIssue(config,inputs);
+    const issue = imageRequestIssue(config,inputs,model);
     const pending=state().imageOperations?.has(project().id+':'+node.id);
     const modelIssue = !config.model ? '请选择生图模型。' : models.length && !models.some(model => model.name === config.model) ? '所选模型不在当前目录中，请在详情中重新选择。' : '';
     const disabled = !state().settings.image?.hasKey || submitting || active || Boolean(issue || modelIssue);
@@ -701,7 +707,7 @@ export function createInfiniteCanvas(bridge) {
       : (issue || modelIssue) ? (issue || modelIssue)
       : candidates.length > 1 ? '候选图片已保存，请在候选区预览并选择最终素材。'
       : `本次生成 ${config.count} 张图片，每张单独提交并由平台计费。`;
-    return {config,models,inputs,job,asset,preview,candidates,submitting,active,disabled,label,hint,estimate};
+    return {config,models,model,inputs,job,asset,preview,candidates,submitting,active,disabled,label,hint,estimate};
   }
   const imageOption = (id,label,value) => `<option value="${escapeHtml(id)}"${id === value ? ' selected' : ''}>${escapeHtml(label)}</option>`;
   function imageCover(asset) {
@@ -718,16 +724,17 @@ export function createInfiniteCanvas(bridge) {
     return `<div class="image-inputs shot-references"><strong>参考素材 · ${inputs.references.length} 张图片 / ${inputs.textInputs.length} 条文字</strong><div class="compact-image-references">${items}</div>${texts}</div>`;
   }
   function imageMarkup(node) {
-    const {config,models,inputs,job,asset,preview,candidates,disabled,label,hint,estimate} = imageData(node);
+    const {config,models,model,inputs,job,asset,preview,candidates,disabled,label,hint,estimate} = imageData(node);
     const missingModel = config.model && !models.some(model => model.name === config.model);
     const selected = Boolean(preview?.id && preview.id === node.selectedAssetId);
     return `<div class="canvas-cover">${imageCover(preview)}</div><div class="canvas-hover-details"><div class="canvas-details-content image-details">
       <div class="image-detail-heading"><strong>生图设置</strong><span>每张卡片独立保存</span></div>
       <div class="shot-fields image-fields"><label>生图模型<select data-image-field="model" aria-label="生图模型">${!config.model ? imageOption('','请选择生图模型',config.model):''}${missingModel ? imageOption(config.model,config.model,config.model):''}${models.map(model => imageOption(model.name,model.name,config.model)).join('')}</select></label>
-      <div class="form-pair"><label>比例<select data-image-field="ratio" aria-label="生图比例">${IMAGE_RATIOS.map(([id,label]) => imageOption(id,label,config.ratio)).join('')}</select></label><label>画质<select data-image-field="quality" aria-label="生图画质">${IMAGE_QUALITIES.map(([id,label]) => imageOption(id,label,config.quality)).join('')}</select></label></div>
+      <div class="form-pair"><label>比例<select data-image-field="ratio" aria-label="生图比例">${IMAGE_RATIOS.filter(([id])=>!models.find(model=>model.name===config.model)?.capabilities || models.find(model=>model.name===config.model).capabilities.ratios.includes(id)).map(([id,label]) => imageOption(id,label,config.ratio)).join('')}</select></label><label>画质<select data-image-field="quality" aria-label="生图画质">${IMAGE_QUALITIES.filter(([id])=>!models.find(model=>model.name===config.model)?.capabilities || models.find(model=>model.name===config.model).capabilities.qualities.includes(id)).map(([id,label]) => imageOption(id,label,config.quality)).join('')}</select></label></div>
        <div class="form-pair"><label>风格<select data-image-field="style" aria-label="生图风格">${IMAGE_STYLES.map(([id,label]) => imageOption(id,label,config.style)).join('')}</select></label><label>生成张数<select data-image-field="count" aria-label="生图生成张数">${Array.from({length:IMAGE_GENERATION_COUNT_MAX},(_,index) => imageOption(index+1,(index+1)+' 张',config.count)).join('')}</select></label></div>
        <div class="shot-estimate image-estimate"><strong>${escapeHtml(imageEstimateText(estimate))}</strong><small>按当前图片模型目录估算；最终扣费以平台为准。</small></div>
        <p class="shot-hint image-control-note">${escapeHtml(IMAGE_CONTROL_NOTE)}</p>
+       <p class="shot-hint image-capability-summary">${escapeHtml(capabilitySummary(model?.capabilities,'image'))}</p><button type="button" class="text-button" data-model-capability="image" data-capability-model="${escapeHtml(config.model)}">查看 / 补充模型能力</button>
       <label class="reference-prompt-editor">图片提示词 <span class="prompt-at-hint">输入 @ 选择参考图片</span><textarea data-reference-prompt data-image-field="prompt" aria-label="图片提示词" rows="5" maxlength="4000" placeholder="描述主体、场景、光线、构图和希望保留的细节…">${escapeHtml(config.prompt)}</textarea><div class="reference-mention-menu" role="listbox" aria-label="可引用的参考图片" hidden></div></label></div>
       ${imageInputsMarkup(node,inputs)}
       <button class="primary full image-generate" data-card-action="image-generate"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button>
@@ -754,17 +761,33 @@ export function createInfiniteCanvas(bridge) {
       <div class="ai-card-input-summary"><strong>上游输入 · ${inputs.length} 项</strong>${inputs.length ? inputs.slice(0, 3).map(input => `<span>${escapeHtml(input.label)}：${escapeHtml(input.text.slice(0, 90))}${input.text.length > 90 ? '…' : ''}</span>`).join('') : '<span>可从文字便签、创作需求或其他 AI 卡片连入文字。</span>'}</div>
       <div class="ai-card-fields"><label>创作任务<select data-ai-field="mode" aria-label="AI 创作任务"${busy ? ' disabled' : ''}>${AI_MODES.map(mode => option(mode.id, mode.label, config.mode)).join('')}</select></label>
       <label>使用模型<select data-ai-field="model" aria-label="语言模型"${busy ? ' disabled' : ''}>${modelOptions}</select></label></div>
-      <label>具体要求<textarea data-ai-field="instruction" rows="3" maxlength="4000" placeholder="例如：保持人物外观不变，拆成 3 个镜头，并补充每个镜头的运镜和光线。"${busy ? ' disabled' : ''}>${escapeHtml(config.instruction)}</textarea></label>
+      <div class="ai-skill-control"><label>使用技能<select data-ai-field="skillId" aria-label="技能"${busy ? ' disabled' : ''}>${[{ id: '', name: '不使用技能' }, ...(config.skillId && !(state().skills || []).some(skill => skill.id === config.skillId) ? [{ id: config.skillId, name: '所选技能已删除或未导入' }] : []), ...(state().skills || [])].map(skill => option(skill.id, skill.name, config.skillId)).join('')}</select></label><button data-card-action="ai-manage-skills" type="button" class="skill-manage-button" title="管理技能库" aria-label="管理技能库">${bridge.icon?.('Library') || ''}</button></div>
+      <label>具体要求<textarea data-ai-field="instruction" rows="5" placeholder="例如：保持人物外观不变，拆成 3 个镜头，并补充每个镜头的运镜和光线。"${busy ? ' disabled' : ''}>${escapeHtml(config.instruction)}</textarea></label>
       <button class="primary full ai-run" data-card-action="ai-run"${busy || !ready ? ' disabled' : ''}>${busy ? '生成中…' : '运行语言模型 ↗'}</button>
       <p class="shot-hint ai-hint">${escapeHtml(!state().settings.text?.hasKey ? '先在左侧“语言模型”中保存 API Key。' : !selectedModel ? '请刷新并选择语言模型。' : config.mode === 'storyboard' ? '模型将返回结构化分镜；确认后可一次创建多个视频镜头草稿。' : '只在点击运行后调用语言模型，生成结果可以继续编辑。')}</p>
       ${config.error ? `<p class="ai-error">${escapeHtml(config.error)}</p>` : ''}
-      <label>当前结果<textarea class="ai-output" data-ai-field="output" rows="7" maxlength="16000" placeholder="运行后，模型结果会出现在这里；你也可以手动修改。">${escapeHtml(config.output)}</textarea></label>
+      <label>当前结果<textarea class="ai-output" data-ai-field="output" rows="10" placeholder="运行后，模型结果会出现在这里；你也可以手动修改。">${escapeHtml(config.output)}</textarea></label>
+      ${bridge.aiImagesMarkup?.(node) || ''}
       <div class="canvas-node-footer ai-output-actions"><span>${config.output ? '结果可继续连接到下游卡片' : '先生成或手动填写结果'}</span>${config.output ? '<button data-card-action="ai-create-text">另存文字卡</button>' : ''}</div>
       <div class="ai-create-actions"><button class="button" data-card-action="ai-create-image"${config.output ? '' : ' disabled'}>创建生图卡</button><button class="button" data-card-action="ai-create-video"${config.output ? '' : ' disabled'}>创建视频卡</button>${hasScenes ? `<button class="button" data-card-action="ai-create-scenes">创建 ${config.scenes.length} 个镜头</button>` : ''}</div>
     </div>`;
   }
   function refreshImageControls(card,node) {
     const data = imageData(node), button = card.querySelector('.image-generate');
+    for(const [field,fallback] of [['ratio',IMAGE_RATIOS],['quality',IMAGE_QUALITIES]]) {
+      const control=card.querySelector(`[data-image-field="${field}"]`);if(!control)continue;
+      const values=data.model?.capabilities?.[field==='ratio'?'ratios':'qualities'] || fallback.map(([value])=>value);
+      const selected=data.config[field],valid=values.includes(selected),labels=new Map(fallback);
+      const choices=values.map(value=>({value,label:labels.get(value)||value}));
+      if(!valid)choices.unshift({value:'',label:'请选择可用'+(field==='ratio'?'比例':'画质')+'（原：'+selected+'）',disabled:true});
+      const previous=Array.from(control.options || []);
+      if(previous.length!==choices.length || previous.some((item,i)=>item.value!==choices[i].value || item.textContent!==choices[i].label)) {
+        control.innerHTML=choices.map(choice=>`<option value="${escapeHtml(choice.value)}"${choice.disabled?' disabled':''}>${escapeHtml(choice.label)}</option>`).join('');
+      }
+      control.value=valid?selected:'';
+    }
+    const summary=card.querySelector('.image-capability-summary');if(summary)summary.textContent=capabilitySummary(data.model?.capabilities,'image');
+    const capability=card.querySelector('[data-model-capability="image"]');if(capability)capability.dataset.capabilityModel=data.config.model;
     if (button) {button.disabled=data.disabled;button.textContent=data.label;}
     const hint = card.querySelector('.image-submit-hint');if (hint) hint.textContent=data.hint;
     const estimate = card.querySelector('.image-estimate');
@@ -786,7 +809,7 @@ export function createInfiniteCanvas(bridge) {
     else if (scene) body = shotMarkup(scene, node);
     else if (node.assetId || node.assetName) body = assetMarkup(node);
     else if (node.kind === 'ai') body = aiMarkup(node);
-    else if (node.kind === 'text') body = `<textarea class="canvas-note" data-node-field="note" aria-label="${escapeHtml(node.label)}内容" placeholder="写下想法、画面描述或视频提示词…" maxlength="2000">${escapeHtml(node.note)}</textarea><div class="canvas-node-footer"><span>文字便签</span><button data-card-action="from-text-ai">创建 AI 卡</button><button data-card-action="from-text-image">创建生图 ↗</button><button data-card-action="from-text">创建视频 ↗</button></div>`;
+    else if (node.kind === 'text') body = `<textarea class="canvas-note" data-node-field="note" aria-label="${escapeHtml(node.label)}内容" placeholder="写下想法、画面描述或视频提示词…">${escapeHtml(node.note)}</textarea><div class="canvas-node-footer"><span>文字便签</span><button data-card-action="from-text-ai">创建 AI 卡</button><button data-card-action="from-text-image">创建生图 ↗</button><button data-card-action="from-text">创建视频 ↗</button></div>`;
     else body = `<div class="canvas-guide"><p>${escapeHtml(node.kind === 'compose' ? descriptor[1] : node.note || descriptor[1])}</p><span class="canvas-guide-icon">${descriptor[0]}</span></div><div class="canvas-node-footer"><span>${{ pending: '待制作', draft: '本地草案', ready: '已就绪', uploaded: '已上传', done: '已有成品', failed: '需检查' }[node.status] || '待制作'}</span><button data-card-action="guide">${descriptor[2]} ↗</button></div>`;
     return `<header class="canvas-node-header" title="拖动标题栏移动卡片；双击标题修改名称"><span class="canvas-node-icon">${isImageGenerationNode(node) ? '✦' : descriptor[0]}</span><input class="canvas-node-title" data-node-field="label" aria-label="${escapeHtml(title)}标题" value="${escapeHtml(title)}" maxlength="80" readonly>${hasVideo ? '<button class="canvas-cover-play" data-card-action="play-cover" aria-label="播放视频" title="播放或暂停视频">播放</button>' : ''}<button class="canvas-node-menu" data-card-action="remove" aria-label="移除${escapeHtml(title)}卡片" title="移除卡片，保留视频生成项和素材">×</button></header>
       <div class="canvas-node-body">${body}</div>
@@ -1005,7 +1028,9 @@ export function createInfiniteCanvas(bridge) {
     const endpoints = new Set(context.reference ? [context.reference.from, context.reference.to] : active ? [active.from, active.to] : []);
     for (const element of connections.querySelectorAll('[data-canvas-link-id]')) {
       const link = { id: element.dataset.canvasLinkId, from: element.dataset.fromNode, to: element.dataset.toNode };
-      element.setAttribute('class', linkClassName(link, context, Boolean(element.querySelector('.canvas-reference-label'))));
+      const saved=graph().links.find(item=>item.id===link.id);
+      const issue=saved ? modelLinkIssue(project(),saved,state().catalog,state().imageCatalog,state().settings.videoModel) : '';
+      element.setAttribute('class', linkClassName(link, context, Boolean(element.querySelector('.canvas-reference-label'))) + (issue ? ' capability-invalid' : ''));
     }
     for (const [id, card] of cards) {
       card.classList.toggle('reference-highlighted', endpoints.has(id));
@@ -1039,7 +1064,8 @@ export function createInfiniteCanvas(bridge) {
       const index = references.findIndex(reference => reference.nodeId === from.id);
       const label = index >= 0 ? referenceLabel(references,index) : '';
       // Endpoints are already in screen coordinates, so reference pills stay fixed-size at every canvas zoom.
-      markup += `<g class="${linkClassName(link, context, Boolean(label))}" data-canvas-link-id="${escapeHtml(link.id)}" data-from-node="${escapeHtml(link.from)}" data-to-node="${escapeHtml(link.to)}"><path d="${d}" marker-end="url(#canvas-arrow)"/><path class="canvas-link-hit" data-link-id="${escapeHtml(link.id)}" d="${d}"/>${label ? '<g class="canvas-reference-label" transform="translate(' + (start.x + end.x) / 2 + ',' + (start.y + end.y) / 2 + ')"><rect x="-26" y="-11" width="52" height="22" rx="7" vector-effect="non-scaling-stroke"/><text text-anchor="middle" dominant-baseline="central" font-size="11">' + label + '</text></g>' : ''}</g>`;
+      const capabilityIssue=label ? modelLinkIssue(project(),link,state().catalog,state().imageCatalog,state().settings.videoModel) : '';
+      markup += `<g class="${linkClassName(link, context, Boolean(label))}${capabilityIssue ? ' capability-invalid' : ''}" data-canvas-link-id="${escapeHtml(link.id)}" data-from-node="${escapeHtml(link.from)}" data-to-node="${escapeHtml(link.to)}">${capabilityIssue ? '<title>'+escapeHtml(capabilityIssue)+'</title>' : ''}<path d="${d}" marker-end="url(#canvas-arrow)"/><path class="canvas-link-hit" data-link-id="${escapeHtml(link.id)}" d="${d}"/>${label ? '<g class="canvas-reference-label" transform="translate(' + (start.x + end.x) / 2 + ',' + (start.y + end.y) / 2 + ')"><rect x="-26" y="-11" width="52" height="22" rx="7" vector-effect="non-scaling-stroke"/><text text-anchor="middle" dominant-baseline="central" font-size="11">' + label + '</text></g>' : ''}</g>`;
     }
     const source = byId.get(connectionFrom);
     if (connectionTargetId && (!source || !byId.has(connectionTargetId) || connectionError(connectionFrom, connectionTargetId))) {
@@ -1105,19 +1131,22 @@ export function createInfiniteCanvas(bridge) {
       const references = resolveSceneReferences(project(), scene);
       if (references.some(item => item.nodeId && (item.nodeId === source.id || output.assetId && item.assetId === output.assetId))) return '这个素材已经连接到同一视频生成项。';
       const proposed = { ...project(), graph: { ...graph(), links: [...graph().links, link] } };
-      if (resolveSceneReferences(proposed,scene).length > (state().settings.referencePreparationLimit || 10)) return '每个视频生成项最多准备 10 份参考素材。';
+      const issue=modelLinkIssue(proposed,link,state().catalog,state().imageCatalog,state().settings.videoModel);
+      if (issue) return issue;
     }
     if (isImageGenerationNode(target) && source.kind === 'image') {
       const inputs = resolveImageInputs(project(),target);
       if (inputs.references.some(reference => reference.nodeId === source.id || source.assetId && reference.assetId === source.assetId)) return '这张图片已连接到本生图卡片。';
-      const limit = imageModelReferenceLimit(target.imageConfig?.model) || 16;
-      if (inputs.references.length >= limit) return `当前生图模型最多准备 ${limit} 张参考图片。`;
+      const proposed={...project(),graph:{...graph(),links:[...graph().links,link]}};
+      const issue=modelLinkIssue(proposed,link,state().catalog,state().imageCatalog,state().settings.videoModel);
+      if(issue)return issue;
     }
     return '';
   }
   async function connect(to) {
+    const from = connectionFrom;
     const target = graph().nodes.find(node => node.id === to);
-    const source = graph().nodes.find(node => node.id === connectionFrom);
+    const source = graph().nodes.find(node => node.id === from);
     if (target?.kind === 'video' && source?.kind === 'image') {
       const asset = project().assets.find(item => !item.deletedAt && item.id === source.assetId && item.kind === 'image');
       if (asset) {
@@ -1125,10 +1154,11 @@ export function createInfiniteCanvas(bridge) {
         if (pixelIssue) { bridge.toast(pixelIssue, true); return false; }
       }
     }
-    const message = connectionError(connectionFrom, to);
+    if (connectionFrom !== from) return false;
+    const message = connectionError(from, to);
     if (message) { bridge.toast(message, true); return false; }
-    const scene = project().scenes.find(scene => scene.id === target.sceneId), from = connectionFrom;
-    if (!changeGraph(() => { graph().links.push(proposedLink(from, to)); connectionFrom = ''; selectedLink = ''; })) return false;
+    const scene = project().scenes.find(scene => scene.id === target.sceneId);
+    if (!changeGraph(() => { graph().links.push(proposedLink(from, to)); if (connectionFrom === from) connectionFrom = ''; selectedLink = ''; })) return false;
     const references = isImageGenerationNode(target)
       ? resolveImageInputs(project(), target).references
       : scene ? resolveSceneReferences(project(),scene) : [];
@@ -1165,19 +1195,18 @@ export function createInfiniteCanvas(bridge) {
       finishEditing();
       interaction = { mode: 'marquee', button: 2, pointerId: event.pointerId, start: point,
         selection: event.shiftKey ? new Set(selection) : new Set(), moved: false };
-      selectionToolsPoint = point;
       marquee.hidden = false; Object.assign(marquee.style, { left: `${point.x}px`, top: `${point.y}px`, width: '0px', height: '0px' });
       document.activeElement?.blur(); viewport.focus({ preventScroll: true });
       viewport.setPointerCapture(event.pointerId); updateTools();
       return;
     }
     const hand = tool === 'hand' || spaceDown || event.button === 1;
+    if (!hand && event.target.closest('.chat-image-preview')) return;
     if (tool === 'marquee' && !hand) {
       if (interactive(event.target) || event.target.closest('[data-port]')) return;
       finishEditing(); selectedLink = ''; connectionFrom = ''; connectionTargetId = '';
       interaction = { mode: 'marquee', pointerId: event.pointerId, start: point,
         selection: event.shiftKey ? new Set(selection) : new Set(), moved: false };
-      selectionToolsPoint = point;
       marquee.hidden = false; Object.assign(marquee.style, { left: `${point.x}px`, top: `${point.y}px`, width: '0px', height: '0px' });
       document.activeElement?.blur(); viewport.focus({ preventScroll: true });
       viewport.setPointerCapture(event.pointerId); event.preventDefault(); updateTools(); return;
@@ -1240,7 +1269,6 @@ export function createInfiniteCanvas(bridge) {
       finishEditing();
       if (event.shiftKey && !hand) {
         interaction = { mode: 'marquee', pointerId: event.pointerId, start: point, selection: new Set(selection), moved: false };
-        selectionToolsPoint = point;
         marquee.hidden = false; Object.assign(marquee.style, { left: `${point.x}px`, top: `${point.y}px`, width: '0px', height: '0px' });
       } else {
         interaction = { mode: 'pan', pointerId: event.pointerId, start: point, view: clone(graph().viewport), moved: false };
@@ -1298,7 +1326,14 @@ export function createInfiniteCanvas(bridge) {
       connectionTargetId = '';
       if (current.moved && event.type !== 'pointercancel' && event.type !== 'lostpointercapture') {
         const targetId = connectionCandidate(localPoint(event), document.elementFromPoint?.(event.clientX, event.clientY));
-        if (targetId) { if (!connect(targetId)) connectionFrom = ''; }
+        if (targetId) {
+          const from = connectionFrom;
+          void connect(targetId).then(connected => {
+            if (!connected && connectionFrom === from) { connectionFrom = ''; connectionTargetId = ''; render(); }
+          }).catch(error => {
+            if (connectionFrom === from) { connectionFrom = ''; connectionTargetId = ''; bridge.toast(error.message, true); render(); }
+          });
+        }
         else { connectionFrom = ''; bridge.toast('未连接。请从右侧圆点拖到目标卡片附近，吸附后松开。'); }
       } else if (event.type === 'pointercancel' || event.type === 'lostpointercapture') connectionFrom = '';
     }
@@ -1420,16 +1455,23 @@ export function createInfiniteCanvas(bridge) {
     if (!isImageGenerationNode(node) || !['model','ratio','quality','style','count','prompt'].includes(field)) return;
     if (!editBefore) editBefore=snapshot();
     try {
-      node.imageConfig = normalizeImageConfig({...node.imageConfig,[field]:control.value});
+      const next={...node.imageConfig,[field]:control.value};
+      if(field==='model') {
+        const model=state().imageCatalog?.find(item=>item.name===next.model);
+        for(const [key,values] of [['ratio',model?.capabilities?.ratios],['quality',model?.capabilities?.qualities]]) {
+          if(values?.length && !values.includes(next[key]||'auto'))next[key]=values.includes('auto')?'auto':values[0];
+        }
+      }
+      node.imageConfig = normalizeImageConfig(next);
       bridge.mark('graph');refreshImageControls(card,node);
     } catch(error) {report(error);}
   }
   function updateAiField(control, node) {
     const field = control.dataset.aiField;
-    if (node.kind !== 'ai' || !['mode', 'model', 'instruction', 'output'].includes(field)) return;
+    if (node.kind !== 'ai' || !['mode', 'model', 'skillId', 'instruction', 'output'].includes(field)) return;
     if (!editBefore) editBefore = snapshot();
     node.aiConfig = normalizeAiConfig({ ...node.aiConfig, [field]: control.value, status: field === 'output' ? 'done' : node.aiConfig?.status });
-    if (field === 'output') node.note = control.value.slice(0, 2000);
+    if (field === 'output') node.note = control.value;
     bridge.mark('graph');
   }
   function updateSceneField(control, card, node) {
@@ -1463,7 +1505,10 @@ export function createInfiniteCanvas(bridge) {
     }
     if (event.target.dataset.shotField) updateSceneField(event.target, card, node);
     if (event.target.dataset.imageField) {updateImageField(event.target,card,node);finishEditing();}
-    if (event.target.dataset.aiField) { updateAiField(event.target, node); finishEditing(); render({ forceId: node.id }); }
+    if (event.target.dataset.aiField) {
+      updateAiField(event.target, node); finishEditing();
+      if (event.target.tagName === 'SELECT') render({ forceId: node.id });
+    }
     if (event.target.matches('[data-preview-candidate]')) { card.dataset.previewAsset = event.target.value; render({ forceId: node.id }); }
   });
   nodesLayer.addEventListener('pointerover', event => {
@@ -1524,6 +1569,7 @@ export function createInfiniteCanvas(bridge) {
       if (operation === 'from-text-ai') addAi(null, node);
       if (operation === 'from-text') addShot(null, node);
       if (operation === 'from-text-image') addImage(null,node);
+      if (operation === 'ai-manage-skills') { bridge.openSkills?.(); return; }
       if (operation === 'ai-run') { finishEditing(); await bridge.runAiNode(node.id); render({ forceId: node.id }); }
       if (operation === 'ai-create-text') addText(null, normalizeAiConfig(node.aiConfig).output);
       if (operation === 'ai-create-image') addImage(null, node);
@@ -1644,7 +1690,7 @@ export function createInfiniteCanvas(bridge) {
     event.dataTransfer.setData('text/x-jingce-asset', item.dataset.canvasAsset); event.dataTransfer.effectAllowed = 'copy';
   });
   viewport.addEventListener('dragover', event => {
-    if (event.dataTransfer.types.includes('Files') || event.dataTransfer.types.includes('text/x-jingce-asset')) {
+    if (event.dataTransfer.types.includes('Files') || event.dataTransfer.types.includes('text/x-jingce-asset') || event.dataTransfer.types.includes('text/x-jingce-chat-image')) {
       event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; viewport.classList.add('file-drag-over');
     }
   });
@@ -1653,6 +1699,12 @@ export function createInfiniteCanvas(bridge) {
     if (!project()) return;
     event.preventDefault(); viewport.classList.remove('file-drag-over');
     const point = screenToWorld(localPoint(event), graph().viewport), assetId = event.dataTransfer.getData('text/x-jingce-asset');
+    const chatImage = event.dataTransfer.getData('text/x-jingce-chat-image');
+    if (chatImage) {
+      try { await bridge.importChatImage?.(JSON.parse(chatImage), point); }
+      catch (error) { report(error); }
+      return;
+    }
     if (assetId) { const asset = project().assets.find(asset => !asset.deletedAt && asset.id === assetId); if (asset) addAsset(asset, point); return; }
     if (event.dataTransfer.files.length) await uploadToCanvas([...event.dataTransfer.files], point);
   });

@@ -16,3 +16,5 @@ backups/
 *.bak
 .DS_Store
 Thumbs.db
+# Browser verification output stays local.
+/outputs/

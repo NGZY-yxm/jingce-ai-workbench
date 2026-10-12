@@ -35,7 +35,7 @@ import { videoParameters, videoParameterControls, videoEstimateText, videoPricin
 import { resolveSceneReferences, referenceLabel } from '../public/reference-model.js';
 import { insertReferenceMention, remapPromptMentions, invalidPromptMentions } from '../public/prompt-mentions.js';
 
-const dolaIds = ['dola-seedance-2.0-903（次）', 'dola-seedance-2.5-30010（次）'];
+const dolaIds = ['dola-seedance-2.0-903-720P（次）', 'dola-seedance-2.5-30010-720P（次）'];
 const ids = ['seedance-2.0-933-720P（秒）', 'seedance-2.0-fast-933-720P（次）',
   'seedance-2.0-mini-903-720P（次）', 'seedance-2.5-301010-1K（秒）', 'minimax-h3-933-2K（次）', ...dolaIds];
 const catalog = catalogForVideoModelIds(ids);
@@ -94,6 +94,13 @@ test('新版模型目录使用当前密钥，仅保留完整模型 ID；无有�
   assert.equal(result[0].defaultResolution, '480p'); assert.equal(result[0].defaultDuration, 5);
   const check = await checkConnection(settings, async () => reply({ data: [{ id: ids[1] }] }));
   assert.equal(check.selectedModelVisible, false); assert.equal(check.readable, true);
+});
+
+test('历史 dola 模型名称仅在当前密钥返回时保留，提交不改写模型 ID', () => {
+  const legacyIds = ['dola-seedance-2.0-903（次）', 'dola-seedance-2.5-30010（次）'];
+  assert.deepEqual(catalogForVideoModelIds(legacyIds).map(model => model.name), legacyIds);
+  assert.deepEqual(catalogForVideoModelIds(dolaIds).map(model => model.name), dolaIds);
+  for (const model of legacyIds) assert.equal(buildVideoRequest({ ...job, model }).model, model);
 });
 
 test('两个 dola 视频模型按密钥权限显示，表单可选且提交完整名称，重启保留选择', async t => {

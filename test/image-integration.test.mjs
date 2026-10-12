@@ -61,7 +61,9 @@ test('生图 Base64 结果自动保存为本机图片素材，并按 operationId
     submitImage: async (settings, request) => {
       submissions++;
       assert.equal(settings.apiKey, 'image-test-private-key');
-      assert.deepEqual(request, { model: 'test-image', prompt: '雨夜书店门口，电影感', n: 1 });
+      const {modelCapabilities,...payload}=request;
+      assert.deepEqual(payload, { model: 'test-image', prompt: '雨夜书店门口，电影感', n: 1 });
+      assert.equal(modelCapabilities.sources.imageLimit,'system');
       return { kind: 'base64', data: PNG.toString('base64'), mime: 'image/png' };
     },
   } });

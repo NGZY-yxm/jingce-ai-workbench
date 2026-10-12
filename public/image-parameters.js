@@ -10,11 +10,11 @@ export const IMAGE_STYLES = [
   ['illustration', '插画'], ['product', '产品广告'], ['watercolor', '水彩'], ['oil', '油画'], ['3d', '3D 渲染'],
 ];
 export const IMAGE_CONTROL_NOTE = '比例、画质、风格会按所选模型的协议发送；实际尺寸和效果由模型决定。';
-export const IMAGE_REFERENCE_NOTE = '支持用已上传或已生成图片作参考；上限按模型能力执行（最多 16 张），每张不超过 20 MiB。';
+export const IMAGE_REFERENCE_NOTE = '支持用已上传或已生成图片作参考；种类和数量按当前模型能力执行，每张不超过 20 MiB。';
 export const IMAGE_GENERATION_COUNT_MAX = 5;
 // This is the storage and upload safety ceiling. Individual model limits are
 // returned by imageModelReferenceLimit().
-export const IMAGE_REFERENCE_MAX = 16;
+export const IMAGE_REFERENCE_MAX = 100;
 export const IMAGE_REFERENCE_FILE_LIMIT = 20 * 1024 * 1024;
 export const IMAGE_REFERENCE_TOTAL_LIMIT = 64 * 1024 * 1024;
 
@@ -95,10 +95,17 @@ export const IMAGE_REFERENCE_MODELS = MODEL_CAPABILITIES.filter(item => item.sup
  * a text-only GPT request.
  */
 export function imageModelCapabilities(model) {
-  const id = String(model || '').trim();
+  const record=typeof model === 'object' && model ? model : null;
+  const id = String(record?.name || model || '').trim();
   if (!id) return null;
+  if (record) {
+    const base=imageModelCapabilities(id);
+    return base && { ...base,...(record.capabilities ? {referenceMax:record.capabilities.imageLimit,
+      supportsReferences:record.capabilities.imageLimit>0} : {}) };
+  }
   const exact = MODEL_CAPABILITY_MAP.get(id);
-  if (exact) return { ...exact };
+  if (exact) return { ...exact, ...(record?.capabilities ? {referenceMax:record.capabilities.imageLimit,
+    supportsReferences:record.capabilities.imageLimit>0} : {}) };
   if (/^gpt-image-/.test(id)) return { name: id, protocol: 'gpt', supportsReferences: true, referenceMax: 16, imageSize: true };
   if (/^grok-imagine-image(?:-2\.0)?$/.test(id)) {
     return { name: id, protocol: 'grok', supportsReferences: true, referenceMax: 3, imageSize: false };
@@ -177,15 +184,21 @@ export function buildImagePrompt(config, textInputs = []) {
   return prompt;
 }
 
-export function imageRequestIssue(config, inputs = {}) {
+export function imageRequestIssue(config, inputs = {}, modelRecord) {
   const references = inputs.references || [];
   if (!Array.isArray(references)) return '图片参考格式不正确。';
   const model = String(config?.model || '').trim();
   if (!model) return '请选择生图模型。';
+  if (modelRecord?.capabilities) {
+    const c=modelRecord.capabilities;
+    if (config.ratio && config.ratio !== 'auto' && !c.ratios.includes(config.ratio)) return '当前模型不支持所选图片比例。';
+    if (config.quality && config.quality !== 'auto' && !c.qualities.includes(config.quality)) return '当前模型不支持所选图片画质。';
+    if (references.length>c.totalLimit) return '当前模型参考素材合计最多 ' + c.totalLimit + ' 份。';
+  }
   if (references.length > IMAGE_REFERENCE_MAX) return '每次最多使用 ' + IMAGE_REFERENCE_MAX + ' 张参考图片。';
   if (references.some(reference => !reference || reference.kind && reference.kind !== 'image')) return '图片生成仅支持图片参考，请移除视频或音频连线。';
   if (references.length) {
-    const limit = imageModelReferenceLimit(model);
+    const limit = modelRecord?.capabilities?.imageLimit ?? imageModelReferenceLimit(model);
     if (!limit) return '当前模型的图片参考接口尚未核实，请选择已适配的 GPT、Grok 或 Gemini 图片模型；参考不会被忽略。';
     if (references.length > limit) return `当前模型最多支持 ${limit} 张参考图片，请减少参考素材。`;
   }

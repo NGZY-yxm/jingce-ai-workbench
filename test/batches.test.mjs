@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { createSkillLibrary } from '../public/skills.js';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -14,7 +15,7 @@ import { videoParameters, videoParameterControls, updateVideoParameter, videoEst
 import { resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey } from '../public/reference-model.js';
 import { updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions } from '../public/prompt-mentions.js';
 import { createReferencePromptEditor } from '../public/prompt-editor.js';
-import { referenceRequestIssue, referenceCapabilityText } from '../public/reference-api.js';
+import { referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities } from '../public/reference-api.js';
 
 const catalog = [{ name: 'model-a', defaultDuration: 5, defaultResolution: '720p',
   tiers: [{ duration: 5, resolution: '720p', price: 1.1 }] }];
@@ -194,12 +195,12 @@ test('页面脚本：数量改变更新总价，预览卡片可显式选片并�
         const previous = this.listeners[name];
         this.listeners[name] = event => { previous?.(event); return fn(event); };
       }, replaceChildren(...children) { this.children = children; this.innerHTML = ''; },
-      querySelector() { return element(selector + ' child'); } });
+      querySelector() { return element(selector + ' child'); }, insertAdjacentHTML(_position, html) { this.innerHTML += html; } });
     return elements.get(selector);
   }
-  const context = vm.createContext({ document: { querySelector: element, querySelectorAll: () => [], addEventListener() {} },
+  const context = vm.createContext({ createSkillLibrary, document: { body: { dataset: {} }, querySelector: element, querySelectorAll: () => [], addEventListener() {} },
     window: { addEventListener() {} }, videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote, structuredClone, console,
-    resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText,
+    resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities,
     updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions, createReferencePromptEditor,
     createInfiniteCanvas: () => ({ render() {}, fit() {}, activate() {}, reset() {}, busy: () => false,
       syncScenes() {}, addAsset(asset) { addAssetCalls.push(asset); }, openBrief() {}, finishEditing() {} }),

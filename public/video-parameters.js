@@ -1,5 +1,5 @@
 const validTier = tier => Number.isInteger(Number(tier?.duration)) && Number(tier.duration) > 0
-  && Number(tier.duration) <= 30 && (tier.price === null || Number.isFinite(Number(tier.price)) && Number(tier.price) >= 0)
+  && Number(tier.duration) <= 300 && (tier.price === null || Number.isFinite(Number(tier.price)) && Number(tier.price) >= 0)
   && typeof tier.resolution === 'string' && tier.resolution.trim();
 
 // Generation options and quotes come from the selected model's published tiers.
@@ -59,7 +59,10 @@ export function videoPricingNote(p) {
   const cost = p.totalEstimate == null ? `将创建 ${p.count} 个视频任务；费用待平台确认。`
     : `每个 ${p.tier.price} ${unit} × ${p.count} 个${billing ? `，${billing}` : ''}。`;
   const synced = p.model?.pricingSyncedAt ? `报价同步于 ${new Date(p.model.pricingSyncedAt).toLocaleTimeString('zh-CN')}。` : '';
-  return cost + [p.model?.pricingNote || '最终扣费以平台为准。', p.model?.specsNote, synced].filter(Boolean).join(' ');
+  const durationSource=p.model?.capabilities?.durationSourcesByResolution?.[p.resolution];
+  const durationNote=durationSource ? `当前分辨率时长：${{platform:'平台读取',user:'用户填写',system:'系统默认'}[durationSource]}。` : '';
+  return cost + [p.model?.pricingNote || '最终扣费以平台为准。', p.model?.specsNote, durationNote, synced,
+    p.model?.capabilityConflicts?.length ? '平台能力信息有冲突，可在模型能力中查看来源并填写。' : ''].filter(Boolean).join(' ');
 }
 
 export function updateVideoParameter(scene, field, value, model) {

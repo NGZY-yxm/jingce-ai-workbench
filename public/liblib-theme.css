@@ -581,7 +581,7 @@
 :root[data-theme] .overview-project-card:hover .project-card-delete { opacity: 1; }
 :root[data-theme] .project-card-delete:hover { color: #ff9f91; border-color: #ff9f91; }
 :root[data-theme] .project-card-delete svg { width: 13px; }
-:root[data-theme] .overview-empty { grid-column: 1/-1; min-height: 250px; display: grid; place-items: center; align-content: center; gap: 9px; border: 1px dashed var(--line); border-radius: 5px; color: var(--muted); text-align: center; }
+:root[data-theme] .overview-empty { grid-column: 1/-1; min-height: 250px; display: grid; place-items: center; align-content: center; gap: 9px; border: 0; color: var(--muted); text-align: center; }
 :root[data-theme] .overview-empty > svg { width: 28px; height: 28px; color: var(--green); }
 :root[data-theme] .overview-empty h3 { font-size: 15px; color: var(--ink); }
 :root[data-theme] .overview-empty p { font-size: 11px; }
@@ -892,6 +892,8 @@
 :root[data-theme="night"] #canvas-minimap .minimap-node.selected { fill: var(--green-light); stroke: var(--green); }
 :root[data-theme="night"] #creative-canvas .canvas-node-resize::after { border-color: #66758e; }
 :root[data-theme] #creative-canvas .canvas-top-actions button { min-height: 32px; border-radius: 6px; }
+/* Match the 14px cover radius plus its 1px border without an opaque corner backing. */
+:root[data-theme] #creative-canvas .canvas-node.cover-card { background: transparent; border-radius: 15px; }
 :root[data-theme] #creative-canvas :is(button,a):focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
 
 :root[data-theme] #videos-view .candidate-grid {

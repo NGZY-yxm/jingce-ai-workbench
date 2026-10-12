@@ -1,6 +1,6 @@
 # 镜策上传 GitHub：先使用私有仓库
 
-本文适用于干净的 `jingce-ai-workbench` 发布目录。该目录包含完整程序源码、中文首页说明、模型地址说明、现有测试和构建脚本；个人运行数据保存在原工作台的 `runtime/`，不在发布目录中。
+本文适用于 `jingce-ai-workbench` 仓库及从该仓库构建的干净发布包。仓库包含完整程序源码、中文首页说明、模型地址说明、现有测试和构建脚本；本机运行时创建的 `runtime/` 不进入 Git 或发布包。
 
 ## 推荐方式：GitHub Desktop
 
@@ -55,7 +55,9 @@ powershell -ExecutionPolicy Bypass -File .\tools\package-share.ps1 -ReleaseTag 2
 
 ## 后续更新
 
-日常开发继续在原“镜策广告工作台”源码目录进行，保留原有运行数据。发布新版本时，从该目录重新执行 `tools/package-github.ps1` 构建新的干净目录，再将其中的源码和文档同步到已经关联 GitHub 的发布仓库。
+日常开发与发布统一在已经关联 GitHub 的 `jingce-ai-workbench` 仓库进行。先通过启动记录中的数据目录和实例身份确认正在查看的工作台来自本仓库，再修改、运行测试和验证页面。机器上存在其他旧副本时，逐项核对其修改是否已合入当前仓库，避免在一套源码中修改、在另一套工作台中验收。
+
+发布前检查 `git status` 与待提交差异，保留当前 `runtime/`。从同一仓库执行 `tools/package-github.ps1` 生成源码包，执行 `tools/package-share.ps1` 生成 Windows 包；两者都使用源码白名单，不会读取个人运行数据。源码包直接使用当前 README，并包括技能文档、浏览器验证脚本和公开工程示例。
 
 例如：
 
@@ -63,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\package-share.ps1 -ReleaseTag 2
 powershell -ExecutionPolicy Bypass -File .\tools\package-github.ps1 -ReleaseTag 20261012
 ```
 
-不要把原工作台整个文件夹拖入仓库。通过 GitHub Desktop 检查变更、提交并 **Push origin**；命令方式则检查后执行 `git add .`、`git commit` 和 `git push`。同步时保留发布仓库自身的 `.git/`，运行后新建的 `runtime/` 始终留在本地。
+通过 GitHub Desktop 检查变更、提交并 **Push origin**；命令方式则只暂存已核对的程序、测试和公开文档，检查 `git diff --cached` 后再提交、推送。个人 `runtime/`、截图、输出日志、历史验证笔记和旧压缩包始终留在本地。不要用整个旧工作台目录覆盖当前仓库，也不要强制推送已有历史。
 
 ## 仓库与在线网站
 

@@ -31,7 +31,7 @@ test('模型参考能力来自明确数量；文档混合示例不能覆盖当�
   assert.equal(referenceCapabilities({ description: '30图10视频 10音频' }).imageLimit, 30);
   assert.equal(referenceCapabilities({ description: '最多7图' }).imageLimit, 7);
   const unsupported = { name: 'seedance-2.5-301010', description: '最多支持30张图10个音频,不参考视频，请注意' };
-  assert.match(referenceRequestIssue(unsupported, references), /未明确支持参考视频/);
+  assert.match(referenceRequestIssue(unsupported, references), /不支持参考视频/);
   assert.match(referenceRequestIssue({ description: '9图3视频，视频需要传视频duration_seconds' }, references), /时长/);
   assert.match(referenceRequestIssue(model, [...references, ...Array(2).fill(references[1])]), /最多支持 3 段/);
   assert.equal(referenceRequestIssue(model, [{ assetId: 'img-1', kind: 'image' }], { allowLocalUpload: true }), '');

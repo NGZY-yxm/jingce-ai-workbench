@@ -1,10 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink, realpath } from 'node:fs/promises';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createStudio } from '../../server.mjs';
 import { atomicJson } from '../../lib/store.mjs';
 
 export const defaultRuntimeRoot = fileURLToPath(new URL('../../runtime/', import.meta.url));
@@ -13,6 +12,11 @@ const sessionName = 'share-session.private.json';
 const lockName = 'share-launch.lock';
 const tokenPattern = /^[a-f0-9]{64}$/;
 const filename = (root, name) => path.join(path.resolve(root), name);
+
+async function canonicalRuntimeRoot(runtimeRoot) {
+  try { return await realpath(path.resolve(runtimeRoot)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return path.resolve(runtimeRoot); }
+}
 
 async function readJson(file) {
   try { return JSON.parse(await readFile(file, 'utf8')); }
@@ -26,7 +30,7 @@ function sameToken(left, right) {
 
 /** A matching application name alone does not establish ownership of a service. */
 export async function readOwnedSession({ runtimeRoot = defaultRuntimeRoot, timeoutMs = 1200 } = {}) {
-  const root = path.resolve(runtimeRoot);
+  const root = await canonicalRuntimeRoot(runtimeRoot);
   const session = await readJson(filename(root, sessionName));
   if (session?.appId !== appId || session.runtimeRoot !== root || !tokenPattern.test(session.token || '')
     || !Number.isInteger(session.port) || session.port < 1 || session.port > 65535) return null;
@@ -41,9 +45,10 @@ export async function readOwnedSession({ runtimeRoot = defaultRuntimeRoot, timeo
 }
 
 export async function removeOwnedSession(runtimeRoot, token) {
-  const file = filename(runtimeRoot, sessionName);
+  const root = await canonicalRuntimeRoot(runtimeRoot);
+  const file = filename(root, sessionName);
   const saved = await readJson(file);
-  if (saved?.runtimeRoot === path.resolve(runtimeRoot) && sameToken(saved.token, token)) {
+  if (saved?.runtimeRoot === root && sameToken(saved.token, token)) {
     await unlink(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
   }
 }
@@ -95,10 +100,11 @@ async function claimLock(root, waitMs) {
 
 /** Start this distribution only; test callers may inject an offline studio factory/options. */
 export async function startSharedStudio({ runtimeRoot = defaultRuntimeRoot, preferredPort = 18970,
-  studioFactory = createStudio, studioOptions = {}, open = false, openUrl = openBrowser, startupWaitMs = 60000 } = {}) {
-  const root = path.resolve(runtimeRoot);
+  studioFactory = async options => (await import('../../server.mjs')).createStudio(options),
+  studioOptions = {}, open = false, openUrl = openBrowser, startupWaitMs = 60000 } = {}) {
   if (!Number.isInteger(preferredPort) || preferredPort < 0 || preferredPort > 65535) throw new Error('工作台端口无效。');
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  await mkdir(path.resolve(runtimeRoot), { recursive: true, mode: 0o700 });
+  const root = await canonicalRuntimeRoot(runtimeRoot);
   const existing = await readOwnedSession({ runtimeRoot: root });
   if (existing) {
     if (open) openUrl(existing.url);

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { canvasLinkAppearance, createInfiniteCanvas, validateCanvasLink } from '../public/canvas.js';
+import { canvasLinkAppearance, createInfiniteCanvas, createAssetCanvasNode, validateCanvasLink } from '../public/canvas.js';
+import { intersectsRect, WORLD_LIMIT } from '../public/canvas-geometry.js';
 import { kinds, validateGraph } from '../lib/workflow.mjs';
 import { normalizeImageConfig, resolveImageInputs } from '../public/image-parameters.js';
 import { videoParameters } from '../public/video-parameters.js';
@@ -190,6 +191,43 @@ function canvasHarness(t, project = { id:'project-test', graph:graph(), scenes:[
   return { canvas,state,project,element,marked,messages,generated,selectedImages,docked,keyboard,cardFor,cardAction,dispatch, document:documentElement, makeElement:tagName=>new Element(tagName) };
 }
 
+test('批量放置用真实画布保存独立素材卡，自动避让且保留未补选的占位卡和撤销记录', async t => {
+  const placeholder = node('batch-placeholder', 'image', { label: '待补构图', assetName: '构图.png' });
+  const first = { id: 'batch-image-a', kind: 'image', name: '第一张.png' }, second = { id: 'batch-image-b', kind: 'image', name: '第二张.png' };
+  const h = canvasHarness(t, { id: 'batch-project', graph: graph([placeholder]), scenes: [], assets: [first, second] });
+  await h.cardAction(placeholder.id, 'relink');
+  const original = structuredClone(h.project.graph.nodes.find(item => item.id === placeholder.id));
+  const options = { allowRelink: false, avoidOverlap: true };
+  const a = h.canvas.addAsset(first, { x: 0, y: 0 }, options), b = h.canvas.addAsset(second, { x: 0, y: 0 }, options);
+  assert.equal(h.project.graph.nodes.length, 3);
+  assert.deepEqual(h.project.graph.nodes.find(item => item.id === placeholder.id), original);
+  for (const added of [a, b]) {
+    assert.equal(added.status, 'uploaded'); assert.equal(added.sceneId, '');
+    assert.equal(added.width, 320); assert.equal(added.height, 260);
+    assert.equal(intersectsRect(added, original), false);
+  }
+  assert.equal(intersectsRect(a, b), false);
+  assert.doesNotThrow(() => validateGraph(h.project.graph));
+  assert.equal(h.marked.includes('graph'), true); assert.deepEqual(h.generated, []);
+  h.element('#undo-canvas').onclick();
+  assert.equal(h.project.graph.nodes.some(item => item.assetId === second.id), false);
+  h.element('#undo-canvas').onclick();
+  assert.equal(h.project.graph.nodes.length, 1);
+  const relinked = h.canvas.addAsset(second);
+  assert.equal(relinked.id, placeholder.id, '批量添加后仍可继续补选原占位卡');
+  assert.equal(h.project.graph.nodes.length, 1);
+});
+
+test('素材卡创建函数在世界边界避让，不修改原画布且生成后端可接受的节点', () => {
+  const input = graph([node('world-edge', 'text', { x: 0, y: WORLD_LIMIT - 100 })]);
+  const before = structuredClone(input);
+  const asset = { id: 'boundary-asset', kind: 'image', name: '边界素材.png' };
+  const added = createAssetCanvasNode(asset, input, { x: 0, y: WORLD_LIMIT - 100 });
+  assert.deepEqual(input, before);
+  assert.equal(intersectsRect(added, input.nodes[0]), false);
+  assert.doesNotThrow(() => validateGraph({ ...input, nodes: [...input.nodes, added] }));
+});
+
 test('聊天选区创建生图和视频草稿保留提示词、限制长度并且不提交生成', t => {
   const h = canvasHarness(t), prompt = '雨夜里，一位旅行者走进旧书店。\n暖色灯光，缓慢推镜头。';
   const image = h.canvas.addPromptImage(prompt);
@@ -316,7 +354,8 @@ test('全屏侧栏拖动与键盘调宽记忆宽度并限制范围，取消拖�
   const h=canvasHarness(t), saved=new Map();
   window.innerWidth=1440;h.element('#creative-canvas').clientWidth=1410;
   window.localStorage={getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)};
-  h.canvas.setExpanded(true);assert.equal(h.docked.at(-1),true);
+  h.canvas.setExpanded(true);assert.equal(h.docked.at(-1),false);
+  h.element('#toggle-canvas-text').onclick();assert.equal(h.docked.at(-1),true);
   const handle=h.element('#canvas-text-resizer'),width=()=>Number(handle.getAttribute('aria-valuenow'));
   const initial=width();assert.equal(initial,450);
   await h.dispatch(handle,'pointerdown',{button:0,pointerId:77,clientX:960});
@@ -1089,7 +1128,8 @@ test('同分镜的多个卡片与同素材的重复卡不能重复占用参考�
 });
 
 test('到达参考准备上限后拒绝新增连接，并保留已经绑定的图片视频及其顺序', async t => {
-  const h = canvasHarness(t,referenceCanvasFixture()); h.state.settings.referencePreparationLimit = 2;
+  const h = canvasHarness(t,referenceCanvasFixture());
+  h.state.catalog=[{name:'limited-model',referenceSupport:{protocol:'content-v3',imageLimit:9,videoLimit:3,audioLimit:3,totalLimit:2}}];
   await dragReference(h,'image-a','shot-main'); await dragReference(h,'video-a','shot-main');
   const links = structuredClone(h.project.graph.links), references = structuredClone(h.project.scenes[0].references);
   await dragReference(h,'image-b','shot-main');
@@ -1797,7 +1837,7 @@ for (const model of ['grok-imagine-image','gemini-2.5-flash-image']) {
     await dragReference(h,'source-three','image-target');
     assert.deepEqual(imageLineLabels(h),['图片1','图片2','图片3']);
     await dragReference(h,'source-four','image-target');
-    assert.equal(h.project.graph.links.length,3); assert.match(h.messages.at(-1),/最多准备 3 张/);
+    assert.equal(h.project.graph.links.length,3); assert.match(h.messages.at(-1),/最多支持 3 张/);
     await dragReference(h,'empty-image','image-target');
     assert.equal(h.project.graph.links.length,3); assert.match(h.messages.at(-1),/还没有保存好的图片/);
     h.project.graph.nodes.push(node('duplicate-source','image',{assetId:h.project.assets[1].id})); h.canvas.render({force:true});

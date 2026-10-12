@@ -7,9 +7,10 @@ import { createProject } from '../lib/workflow.mjs';
 import { LEGACY_VIDEO_REQUEST_MODE as VIDEO_REQUEST_MODE } from '../lib/providers.mjs';
 import { videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote } from '../public/video-parameters.js';
 import { resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey } from '../public/reference-model.js';
-import { referenceRequestIssue, referenceCapabilityText } from '../public/reference-api.js';
+import { referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities } from '../public/reference-api.js';
 import { updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions } from '../public/prompt-mentions.js';
 import { createReferencePromptEditor } from '../public/prompt-editor.js';
+import { createSkillLibrary } from '../public/skills.js';
 
 const catalog = [{ name: 'model-a', defaultDuration: 5, defaultResolution: '720p',
   tiers: [5, 15].map(duration => ({ duration, resolution: '720p', price: duration / 5 })) }];
@@ -30,9 +31,9 @@ async function page(fetcher, storage = new Map()) {
     sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     setTimeout: () => 1, clearTimeout() {}, crypto: { randomUUID }, structuredClone, console,
     videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote,
-    resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText,
+    resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities,
     updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions, createReferencePromptEditor,
-    createInfiniteCanvas: () => ({ render() {}, fit() {}, activate() {}, reset() {}, busy: () => false }), fetch: fetcher,
+    createSkillLibrary, createInfiniteCanvas: () => ({ render() {}, fit() {}, activate() {}, reset() {}, busy: () => false }), fetch: fetcher,
   });
   const script = (await readFile(new URL('../public/app.js', import.meta.url), 'utf8'))
     .replace(/^import[^\n]*\n/gm, '').replace(/\ninit\(\);\s*$/, '\n');

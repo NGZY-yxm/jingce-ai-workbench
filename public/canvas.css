@@ -22,6 +22,32 @@
 }
 
 .canvas-stage { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.canvas-workspace {
+  --canvas-control-top: max(18px, env(safe-area-inset-top, 0px));
+  --canvas-control-left: max(12px, env(safe-area-inset-left, 0px));
+  --canvas-control-right: max(12px, env(safe-area-inset-right, 0px));
+  --canvas-control-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  --canvas-tool-width: 52px;
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  container: canvas-workspace / inline-size;
+}
+/* Controls use the visible canvas container, independently of world pan/zoom. */
+.canvas-controls {
+  position: absolute;
+  z-index: 36;
+  top: var(--canvas-control-top);
+  left: calc(var(--canvas-control-left) + var(--canvas-tool-width) + 12px);
+  right: var(--canvas-control-right);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  pointer-events: none;
+}
 .canvas-text-panel { position: relative; display: flex; flex: 0 0 var(--canvas-chat-width, clamp(310px, 34%, 450px)); flex-direction: column; min-width: 0; min-height: 0; padding: 14px 14px 14px 20px; overflow: hidden; border-left: 1px solid var(--line); background: var(--paper); color: var(--ink); }
 .canvas-text-resizer { position: absolute; z-index: 71; inset: 0 auto 0 0; width: 8px; cursor: col-resize; touch-action: none; }
 .canvas-text-resizer::after { content: ''; position: absolute; top: calc(50% - 20px); left: 3px; width: 2px; height: 40px; border-radius: 2px; background: #9aa1b9; }
@@ -174,6 +200,16 @@
   align-items: stretch;
   gap: 3px;
 }
+#creative-canvas .canvas-workspace > .canvas-creation-toolbar {
+  top: var(--canvas-control-top);
+  left: var(--canvas-control-left);
+  width: var(--canvas-tool-width);
+  max-height: calc(100% - var(--canvas-control-top) - var(--canvas-control-bottom) - 58px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
 .canvas-creation-toolbar button {
   min-height: 52px;
   padding: 7px 2px;
@@ -191,20 +227,24 @@
 .canvas-creation-toolbar button.active { background: #e8e8f1; color: #28475b; font-weight: 600; }
 .canvas-creation-toolbar i { height: 1px; background: #e5e2ea; margin: 4px; }
 .canvas-selection-tools {
-  z-index: 36;
-  bottom: 74px;
-  left: 92px;
+  grid-column: 1;
+  grid-row: 1;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
   min-height: 38px;
   padding: 5px 7px 5px 12px;
   border-radius: 10px;
   font-size: 10px;
 }
+.canvas-controls .canvas-selection-tools { position: relative; pointer-events: auto; }
 .canvas-node :is(input,textarea,[contenteditable="true"]) { user-select: text; }
-.canvas-selection-tools > span { color: #818090; margin-right: 7px; }
-.canvas-selection-tools button { padding: 6px 9px; border-radius: 6px; color: #3e5069; }
+.canvas-selection-tools > span { min-width: 0; color: #818090; margin-right: 7px; overflow-wrap: anywhere; }
+.canvas-selection-tools button { flex-shrink: 0; min-height: 28px; padding: 6px 9px; border-radius: 6px; color: #3e5069; white-space: nowrap; }
 .canvas-selection-tools button:hover { background: #ede9f3; }
 #remove-selection { color: #9c6a56; }
 #canvas-marquee { position: absolute; z-index: 25; pointer-events: none; border: 1px solid #5e7690; border-radius: 3px; background: #46587918; }
@@ -222,6 +262,7 @@
   min-height: 43px;
   border-radius: 12px;
 }
+.canvas-workspace > .canvas-bottom-bar { left: var(--canvas-control-left); right: var(--canvas-control-right); bottom: var(--canvas-control-bottom); }
 .canvas-history, .canvas-zoom { display: flex; align-items: center; gap: 3px; }
 .canvas-history button, .canvas-zoom button { min-width: 31px; height: 30px; padding: 5px 8px; border-radius: 7px; font-size: 12px; color: #606374; }
 .canvas-history button { font-size: 21px; line-height: 1; }
@@ -232,13 +273,14 @@
 #arrange-canvas, #fit-canvas { font-size: 10px; }
 #fit-canvas { margin-right: 5px; border-right: 1px solid #e7e3ed; border-radius: 7px 0 0 7px; }
 .canvas-overview { z-index: 30; top: 82px; right: 16px; width: 170px; height: 110px; padding: 7px; border-radius: 12px; overflow: hidden; }
+#creative-canvas .canvas-controls .canvas-overview { position: relative; grid-column: 2; grid-row: 1; top: auto; right: auto; justify-self: end; pointer-events: auto; }
 #canvas-minimap { display: block; width: 100%; height: 100%; overflow: hidden; cursor: crosshair; background: #f8f5fa; border-radius: 6px; }
 #canvas-minimap rect { fill: #e0e0eb; stroke: #9c9eb3; stroke-width: 1; vector-effect: non-scaling-stroke; }
 #canvas-minimap path, #canvas-minimap line { fill: none; stroke: #a7aabd; stroke-width: 1; vector-effect: non-scaling-stroke; }
 #canvas-minimap .minimap-viewport, #canvas-minimap .minimap-view, #canvas-minimap .map-viewport { fill: #2f537116; stroke: #3c5d7c; stroke-width: 1.5; }
 .canvas-overview-toggle { position: absolute; right: 7px; top: 7px; z-index: 1; width: 28px; height: 28px; padding: 5px; border-radius: 6px; background: var(--paper); color: var(--ink); }
 .canvas-overview-toggle svg { width: 18px; height: 18px; }
-#creative-canvas#creative-canvas .canvas-overview.collapsed { top: 82px; right: 8px; width: 28px; height: 28px; padding: 0; background: transparent; border: 0; box-shadow: none; overflow: visible; }
+#creative-canvas .canvas-controls .canvas-overview.collapsed { width: 28px; height: 28px; padding: 0; background: transparent; border: 0; box-shadow: none; overflow: visible; }
 .canvas-overview.collapsed .canvas-overview-toggle { position: absolute; top: 0; right: 0; }
 .canvas-overview.collapsed #canvas-minimap { display: none; }
 #creative-canvas:has(.canvas-assets-panel:not([hidden]):not(.hidden)) .canvas-overview,
@@ -459,7 +501,6 @@ body:has(#creative-canvas.canvas-expanded) #toast { z-index: 130; left: 50%; }
   .canvas-top-actions button { padding: 6px 9px; }
 }
 @media (max-width: 920px) {
-  .canvas-selection-tools { top: auto; bottom: 74px; }
   .canvas-assets-panel, .canvas-brief.brief-panel { bottom: 116px; }
 }
 @media (max-width: 900px) {
@@ -478,7 +519,6 @@ body:has(#creative-canvas.canvas-expanded) #toast { z-index: 130; left: 50%; }
   .canvas-creation-toolbar button { min-height: 48px; padding: 6px 0; font-size: 9px; }
   .canvas-creation-toolbar button > span { font-size: 18px; }
   .canvas-overview { top: 90px; right: 10px; width: 126px; height: 85px; padding: 5px; border-radius: 9px; }
-  .canvas-selection-tools { top: auto; bottom: 74px; left: 74px; right: 10px; flex-wrap: wrap; gap: 3px; padding: 5px; font-size: 9px; }
   .canvas-selection-tools > span { margin: 0 2px; flex: 1; }
   .canvas-selection-tools button { padding: 6px; font-size: 9px; }
   .canvas-bottom-bar { left: 10px; right: 10px; bottom: 11px; padding: 5px; gap: 4px; border-radius: 10px; }
@@ -500,6 +540,18 @@ body:has(#creative-canvas.canvas-expanded) #toast { z-index: 130; left: 50%; }
   #canvas-text-host .text-chat-footer { align-items: stretch; flex-direction: column; }
   #canvas-text-host .text-chat-footer .honest-note { max-width: none; }
   #canvas-text-host .text-chat-footer .primary { width: 100%; }
+}
+@container canvas-workspace (max-width: 640px) {
+  .canvas-selection-tools { gap: 3px; padding: 5px; font-size: 11px; }
+  .canvas-selection-tools > span { margin: 0 2px; }
+  .canvas-selection-tools button { min-height: 32px; padding: 6px; font-size: 11px; }
+  #creative-canvas .canvas-controls .canvas-overview:not(.collapsed) { width: 126px; height: 85px; }
+  /* An expanded map gets its own row when selection actions need the width. */
+  .canvas-controls:has(.canvas-selection-tools:not([hidden])):has(.canvas-overview:not(.collapsed)) .canvas-selection-tools { grid-column: 1 / -1; }
+  #creative-canvas .canvas-controls:has(.canvas-selection-tools:not([hidden])) .canvas-overview:not(.collapsed) { grid-row: 2; }
+}
+@container canvas-workspace (max-width: 420px) {
+  .canvas-selection-tools > span { flex: 1 0 100%; margin: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .canvas-node { transition: none; }

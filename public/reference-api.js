@@ -1,4 +1,8 @@
-// Only explicit counts in the current provider catalog establish reference support.
+import { capabilitySummary, withModelCapabilities } from './model-capabilities.js';
+export function referencePreparationModel(model) {
+  return model || withModelCapabilities({name:'',referenceSupport:{protocol:'content-v3'}},'video');
+}
+// Model capabilities are shared with the form, canvas and server.
 export function referenceCapabilities(model) {
   if (model?.referenceSupport) return model.referenceSupport;
   const description = String(model?.description || '');
@@ -30,7 +34,8 @@ export function referenceRequestIssue(model, references, options = {}) {
   if (references == null) return '';
   if (!Array.isArray(references)) return '参考素材清单格式不正确，请重新保存当前视频生成项。';
   if (!references.length) return '';
-  if (references.length > 10) return '每个视频生成项最多准备 10 份参考素材。';
+  const constraintIssue = referenceConstraintIssue(model,references,options);
+  if (constraintIssue) return constraintIssue;
   const support = referenceCapabilities(model);
   const v3 = support.protocol === 'content-v3';
   if (references.some(reference => !reference || !(v3 ? ['image', 'video', 'audio'] : ['image', 'video']).includes(reference.kind))) return v3 ? '参考素材仅支持图片、视频和音频。' : '参考素材仅支持图片和视频。';
@@ -40,14 +45,6 @@ export function referenceRequestIssue(model, references, options = {}) {
     if (references.filter(reference => reference.role === 'first_frame').length > 1) return '首帧只能选择一张图片。';
     if (references.filter(reference => ['last_frame', 'end_frame'].includes(reference.role)).length > 1) return '尾帧只能选择一张图片。';
     if (references.some(reference => ['first_frame', 'last_frame', 'end_frame'].includes(reference.role)) && references.some(reference => reference.kind === 'audio')) return '首帧或尾帧图片不能与参考音频同时使用，请调整参考素材。';
-  }
-  for (const kind of v3 ? [] : ['image', 'video']) {
-    const count = references.filter(reference => reference.kind === kind).length;
-    const limit = support[kind + 'Limit'];
-    if (count && !limit) return kind === 'video'
-      ? '当前模型未明确支持参考视频，请在模型连接中选择 sd-2.0-J2、sd-2.5-J2 或支持视频的 fast 模型。'
-      : '当前模型未明确支持参考图片，请刷新模型目录或重新选择模型。';
-    if (count > limit) return '当前模型最多支持 ' + limit + (kind === 'image' ? ' 张参考图片。' : ' 段参考视频。');
   }
   if (references.some(reference => reference.kind === 'video') && support.videoDurationRequired) {
     return '该模型要求参考视频附带时长，其对象格式尚需平台确认；请先选择 sd-2.0-J2 等已确认格式的模型。';
@@ -61,9 +58,35 @@ export function referenceRequestIssue(model, references, options = {}) {
   return '';
 }
 
+// Connection validation deliberately stops before upload/URL checks. A local
+// material can be connected during preparation, subject to its model's limits.
+export function referenceConstraintIssue(model, references, options = {}) {
+  if (!Array.isArray(references)) return '参考素材清单格式不正确。';
+  if (!references.length) return '';
+  const support=referenceCapabilities(model), v3=support.protocol === 'content-v3';
+  const labels={image:'图片',video:'视频',audio:'音频'};
+  for (const kind of ['image','video','audio']) {
+    const count=references.filter(item=>item?.kind === kind).length;
+    const limit=support[kind+'Limit'] ?? (v3 ? 10 : 0);
+    if (count && limit === 0) return '当前模型不支持参考' + labels[kind] + '，无法连接此类素材。';
+    if (count > limit) return '当前模型最多支持 ' + limit + ' ' + ({image:'张',video:'段',audio:'份'}[kind]) + '参考' + labels[kind] + '。';
+  }
+  const total=support.totalLimit ?? 10;
+  if (references.length>total) return '当前模型参考素材合计最多 ' + total + ' 份。';
+  const maxSeconds=support.maxVideoDurationSeconds;
+  if (maxSeconds>0) {
+    const videos=references.filter(item=>item.kind==='video');
+    const durations=videos.map(item=> item.duration ?? options.assets?.find(asset=>asset.id===item.assetId)?.duration);
+    if (durations.some(value=>!Number.isFinite(value) || value<=0)) return '当前模型限制参考视频总时长，请先补全视频时长信息。';
+    if (durations.reduce((sum,value)=>sum+value,0)>maxSeconds) return '参考视频总时长最多 ' + maxSeconds + ' 秒。';
+  }
+  return '';
+}
+
 export function referenceCapabilityText(model) {
+  if (model?.capabilities) return capabilitySummary(model.capabilities,'video') + '未公开的字段可在“模型能力”中填写。';
   const support = referenceCapabilities(model);
-  if (support.protocol === 'content-v3') return '新版接口可传图片、视频和音频，也可设置首帧 / 尾帧；素材能力及数量未逐模型实测。本地最多准备 10 份素材，首尾帧不能与参考音频同时使用。';
+  if (support.protocol === 'content-v3') return '图片、视频和音频的未公开限制采用系统默认，可在“模型能力”中补充；首尾帧不能与参考音频同时使用。';
   return '当前模型：最多 ' + support.imageLimit + ' 张图片、' + support.videoLimit + ' 段视频'
     + (support.videoDurationRequired ? '；参考视频的时长格式待确认' : '') + '。每个视频生成项本地最多准备 10 份参考。';
 }

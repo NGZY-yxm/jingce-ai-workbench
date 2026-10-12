@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { setImmediate } from 'node:timers/promises';
 import vm from 'node:vm';
-import { createProject } from '../lib/workflow.mjs';
+import { createProject, updateProject, setAssetDeleted } from '../lib/workflow.mjs';
+import { createAssetCanvasNode } from '../public/canvas.js';
+import { intersectsRect } from '../public/canvas-geometry.js';
 import * as videoParameters from '../public/video-parameters.js';
 import * as referenceModel from '../public/reference-model.js';
 import * as referenceApi from '../public/reference-api.js';
@@ -11,14 +13,18 @@ import * as promptMentions from '../public/prompt-mentions.js';
 import * as promptEditor from '../public/prompt-editor.js';
 import * as imageParameters from '../public/image-parameters.js';
 import { renderTextMarkdown } from '../public/text-markdown.js';
+import { createSkillLibrary, skillOptions } from '../public/skills.js';
+import { imageHistoryContent } from '../public/chat-images.js';
+import { capabilitySummary } from '../public/model-capabilities.js';
+import { createCapabilityEditor } from '../public/capability-editor.js';
 
-const views = ['canvas', 'assets', 'images', 'videos', 'results', 'text'];
-const labels = ['创作画布', '素材库', '图片生成', '视频生成', '生成结果', '语言模型'];
+const views = ['overview', 'canvas', 'text', 'images', 'videos', 'assets', 'results', 'skills'];
+const labels = ['项目总览', '创作画布', '创作助手', '图片生成', '视频生成', '素材库', '生成结果', '技能库'];
 
 // Model only the DOM operations used by app.js. Rendering, routing, form
 // validation and API request construction all run from the real page script.
 async function pageHarness({ respond, confirm = () => true } = {}) {
-  const elements = new Map(), requests = [], canvasCalls = [];
+  const elements = new Map(), requests = [], canvasCalls = [], downloads = [], archives = [];
   class Element {
     constructor(selector = '', tagName = 'div') {
       this.selector = selector; this.tagName = tagName.toUpperCase();
@@ -63,6 +69,7 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
       }
     }
     querySelector(selector) { return element(this.selector + ' ' + selector); }
+    insertAdjacentHTML(position, html) { this.innerHTML = position === 'afterbegin' ? String(html) + this.innerHTML : this.innerHTML + String(html); }
     querySelectorAll() { return []; }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
@@ -101,7 +108,7 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
         element('#image-page-quality').value = 'auto';
       }
     }
-    click() { return this.fire('click', { target: this }); }
+    click() { if (this.tagName === 'A' && this.download) downloads.push({ href: this.href, name: this.download }); return this.fire('click', { target: this }); }
     focus() { document.activeElement = this; }
     select() { this.selectionStart = 0; this.selectionEnd = this.value.length; }
     blur() { if (document.activeElement === this) document.activeElement = null; return this.fire('blur'); }
@@ -126,6 +133,7 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
   });
   const documentListeners = new Map(); let selection = null, bridge;
   const document = {
+    body: new Element('body', 'body'),
     documentElement: { dataset: { theme: 'night' } }, activeElement: null,
     querySelector: element, getSelection: () => selection,
     addEventListener(type, handler) { if (!documentListeners.has(type)) documentListeners.set(type, []); documentListeners.get(type).push(handler); },
@@ -144,18 +152,24 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
     addPromptVideo(prompt) { canvasCalls.push({ action:'addPromptVideo',prompt }); return { id:'video-draft' }; },
   };
   let sequence = 0, harness;
-  const context = vm.createContext({ document, window: { addEventListener() {}, confirm },
+  class Zip {
+    constructor() { this.files = new Map(); archives.push(this); }
+    file(name, data) { this.files.set(name, data); return this; }
+    async generateAsync(options) { this.options = options; return new Blob(['test archive']); }
+  }
+  const context = vm.createContext({ document, window: { addEventListener() {}, confirm }, Blob, URL: { createObjectURL: () => 'blob:test-archive', revokeObjectURL() {} }, JSZip: Zip,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, structuredClone, console,
-    ...videoParameters, ...referenceModel, ...referenceApi, ...promptMentions, ...promptEditor, ...imageParameters, renderTextMarkdown,
+    ...videoParameters, ...referenceModel, ...referenceApi, ...promptMentions, ...promptEditor, ...imageParameters, renderTextMarkdown, createSkillLibrary, skillOptions, imageHistoryContent, capabilitySummary, createCapabilityEditor, createAssetCanvasNode,
     createInfiniteCanvas: value => { bridge = value; return canvas; }, setTimeout: () => 1, clearTimeout() {},
     crypto: { randomUUID: () => 'operation-' + ++sequence },
     fetch: async (url, options = {}) => {
       const request = { url, method: options.method || 'GET', headers: options.headers,
         body: typeof options.body === 'string' ? JSON.parse(options.body) : options.body };
       requests.push(request);
-      const value = respond ? await respond(request, harness) : request.url.includes('/image-jobs')
+      const value = request.url.startsWith('/api/skills') ? [] : respond ? await respond(request, harness) : request.url.includes('/image-jobs')
         ? harness.state.imageJobs : request.url.includes('/jobs') ? harness.state.jobs : harness.state.project;
-      return { ok: true, status: 200, json: async () => structuredClone(value) };
+      const status = value?.$status || 200;
+      return { ok: status < 400, status, json: async () => structuredClone(value), arrayBuffer: async () => Uint8Array.from(value?.bytes || [1, 2, 3]).buffer };
     },
   });
   const script = (await readFile(new URL('../public/app.js', import.meta.url), 'utf8'))
@@ -166,7 +180,10 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
   harness.state.project = project; harness.state.saved = structuredClone(project); harness.state.token = 'frontend-test-token';
   harness.state.settings = { hasKey: true, videoModel: 'video-a', generationCountMax: 5,
     image: { hasKey: true, imageModel: 'image-a' } };
-  harness.state.imageCatalog = [{ name: 'image-a', description: '默认图片模型' }, { name: 'image-b' }];
+  const imageCapabilities = { imageLimit: 16, videoLimit: 0, audioLimit: 0, totalLimit: 16,
+    qualities: ['auto', '1k', '2k', '4k'], ratios: ['auto', '1:1', '16:9', '9:16'] };
+  harness.state.imageCatalog = [{ name: 'image-a', description: '默认图片模型', imageProtocol: 'gpt', capabilities: imageCapabilities },
+    { name: 'image-b', imageProtocol: 'gpt', capabilities: imageCapabilities }];
   harness.state.catalog = [{ name: 'video-a', defaultDuration: 5, defaultResolution: '720p',
     tiers: [{ duration: 5, resolution: '720p', price: 1 }] }];
   harness.state.tools = { ready: true, message: '本机合成可用' };
@@ -180,7 +197,7 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
     for (const handler of documentListeners.get('selectionchange') || []) await handler();
     return selection;
   };
-  return { ...harness, element, tabs, panels, requests, canvasCalls, canvas, selectText };
+  return { ...harness, element, tabs, panels, requests, canvasCalls, canvas, selectText, downloads, archives };
 }
 
 test('全屏聊天挂载移动同一个聊天卡，往返保留输入、消息和滚动位置', async () => {
@@ -246,7 +263,9 @@ function imageBatchFixture(projectId, { count = 3, nodeId = '', model = 'gpt-ima
 }
 
 function enableImageReferenceModel(h) {
-  h.state.imageCatalog.push({ name: 'gpt-image-2.5-flare', description: '参考图测试模型' });
+  h.state.imageCatalog.push({ name: 'gpt-image-2.5-flare', description: '参考图测试模型', imageProtocol: 'gpt',
+    capabilities: { imageLimit: 16, videoLimit: 0, audioLimit: 0, totalLimit: 16,
+      qualities: ['auto', '1k', '2k', '4k'], ratios: ['auto', '1:1', '16:9', '9:16'] } });
   h.setView('images');
   h.element('#image-page-model').value = 'gpt-image-2.5-flare';
 }
@@ -562,6 +581,282 @@ test('结果详情拒绝失效结果，刷新移除素材及切换工程时关�
   h.setProject(null);
   await until(() => !dialog.open && !content.innerHTML && !title.textContent);
   assert.deepEqual(h.requests, [], '详情生命周期只更新本地展示');
+});
+
+test('素材库和生成结果的多选集合独立，全选只作用于当前工程筛选列表', async () => {
+  const h = await pageHarness();
+  const current = h.state.project;
+  const other = createProject({ title: '另一工程' });
+  const currentUpload = { id: 'batch-current-upload', kind: 'image', source: 'upload', name: '当前参考.png', size: 100 };
+  const currentResult = { id: 'batch-current-result', kind: 'image', source: 'model', name: '当前结果.png', size: 100 };
+  const otherUpload = { id: 'batch-other-upload', kind: 'video', source: 'upload', name: '另一工程视频.mp4', size: 100 };
+  current.assets = [currentUpload, currentResult]; other.assets = [otherUpload];
+  h.state.projects = [current, other];
+  h.setView('assets');
+  h.element('#asset-project-filter').value = current.id;
+  await h.element('#asset-project-filter').fire('change', { target: h.element('#asset-project-filter') });
+  await h.element('#select-all-assets').click();
+  assert.deepEqual(new Set(h.state.assetSelection), new Set([currentUpload.id, currentResult.id]));
+  assert.equal(h.element('#asset-selection-count').textContent, '已选 2 个素材');
+  await h.element('#clear-asset-selection').click();
+  assert.equal(h.state.assetSelection.size, 0);
+  h.element('#asset-project-filter').value = other.id;
+  await h.element('#asset-project-filter').fire('change', { target: h.element('#asset-project-filter') });
+  await h.element('#select-all-assets').click();
+  assert.deepEqual(new Set(h.state.assetSelection), new Set([otherUpload.id]), '全选不能带入其他工程素材');
+  h.setView('results');
+  await h.element('#select-all-results').click();
+  assert.deepEqual(new Set(h.state.resultSelection), new Set([currentResult.id]), '结果页使用独立选择集合');
+  assert.deepEqual(new Set(h.state.assetSelection), new Set([otherUpload.id]), '素材页选择不应被结果页覆盖');
+});
+
+test('单项勾选可以取消，结果类型筛选只保留当前可见项的选择', async () => {
+  const h = await pageHarness();
+  h.state.project.assets = [
+    { id: 'select-image', kind: 'image', source: 'model', name: '图片.png', size: 100 },
+    { id: 'select-video', kind: 'video', source: 'model', name: '视频.mp4', size: 100 },
+  ];
+  h.setView('assets');
+  const input = { dataset: { selectAsset: 'select-image' }, checked: true,
+    closest: selector => selector === '[data-select-asset],[data-select-result]' ? input : null };
+  await h.element('#asset-list').fire('change', { target: input });
+  assert.deepEqual([...h.state.assetSelection], ['select-image']);
+  input.checked = false;
+  await h.element('#asset-list').fire('change', { target: input });
+  assert.equal(h.state.assetSelection.size, 0);
+  h.setView('results'); await h.element('#select-all-results').click();
+  h.element('#result-filter').value = 'video';
+  await h.element('#result-filter').fire('change');
+  assert.deepEqual([...h.state.resultSelection], ['select-video']);
+  await h.element('#select-all-results').click();
+  assert.equal(h.state.resultSelection.size, 0);
+  assert.equal(h.element('#batch-delete-results').disabled, true);
+});
+
+test('批量下载把所选素材打成一个 ZIP，重名和非法文件名会被安全处理', async () => {
+  const h = await pageHarness();
+  h.state.project.assets = [
+    { id: 'batch-download-one', kind: 'image', source: 'upload', name: '同名/参考.png', size: 100 },
+    { id: 'batch-download-two', kind: 'image', source: 'upload', name: '同名/参考.png', size: 100 },
+  ];
+  h.setView('assets');
+  await h.element('#select-all-assets').click();
+  await h.element('#batch-download-assets').click();
+  assert.deepEqual(h.requests.filter(request => request.url.includes('/api/assets/')).map(request => request.url), [
+    '/api/assets/batch-download-two?download=1', '/api/assets/batch-download-one?download=1']);
+  assert.equal(h.archives.length, 1);
+  assert.deepEqual([...h.archives[0].files.keys()], ['同名_参考.png', '同名_参考 (2).png']);
+  assert.equal(h.downloads.length, 1, '批量下载只触发一次浏览器下载');
+  assert.match(h.downloads[0].name, /素材-2个\.zip$/);
+});
+
+test('批量操作执行期间禁用两个页面的选择工具，结束后恢复且不能重复删除', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const h = await pageHarness({ respond: async request => {
+    if (request.url.startsWith('/api/assets/')) { await pending; return { bytes: [1, 2, 3] }; }
+    throw new Error('不应发送其他请求');
+  } });
+  h.state.project.assets = [{ id: 'busy-file', kind: 'image', source: 'model', name: '打包.png', size: 100 }];
+  h.setView('assets'); await h.element('#select-all-assets').click();
+  const downloading = h.element('#batch-download-assets').click();
+  try {
+    await until(() => h.requests.length === 1);
+    for (const id of ['select-all-assets', 'clear-asset-selection', 'batch-delete-assets', 'select-all-results', 'result-filter', 'asset-project-filter']) {
+      assert.equal(h.element('#' + id).disabled, true, id);
+    }
+    await h.element('#batch-delete-assets').click();
+    assert.equal(h.requests.some(request => request.method === 'DELETE'), false);
+  } finally { release(); await downloading; }
+  assert.equal(h.element('#select-all-assets').disabled, false);
+  assert.equal(h.element('#batch-delete-assets').disabled, false);
+  assert.equal(h.element('#result-filter').disabled, false);
+});
+
+test('批量删除部分失败时只清理成功项，失败项保留选择且可重试', async () => {
+  const h = await pageHarness({
+    confirm: () => true,
+    respond: async (request, current) => {
+      if (request.method !== 'DELETE') return current.state.project;
+      if (request.url.endsWith('/batch-delete-success')) {
+        return { ...current.state.project, revision: current.state.project.revision + 1,
+          assets: current.state.project.assets.map(asset => asset.id === 'batch-delete-success'
+            ? { ...asset, deletedAt: '2026-10-12T01:00:00Z' } : asset) };
+      }
+      return { $status: 503, error: '暂时无法删除' };
+    },
+  });
+  h.state.project.assets = [
+    { id: 'batch-delete-success', kind: 'image', source: 'upload', name: '成功删除.png', size: 100 },
+    { id: 'batch-delete-failure', kind: 'image', source: 'upload', name: '稍后重试.png', size: 100 },
+  ];
+  h.setView('assets'); await h.element('#select-all-assets').click();
+  await h.element('#batch-delete-assets').click();
+  assert.equal(h.state.project.assets.find(asset => asset.id === 'batch-delete-success').deletedAt, '2026-10-12T01:00:00Z');
+  assert.equal(h.state.assetSelection.has('batch-delete-success'), false);
+  assert.deepEqual([...h.state.assetSelection], ['batch-delete-failure']);
+  assert.deepEqual(h.requests.filter(request => request.method === 'DELETE').map(request => request.url), [
+    '/api/projects/' + h.state.project.id + '/assets/batch-delete-failure',
+    '/api/projects/' + h.state.project.id + '/assets/batch-delete-success',
+  ]);
+});
+
+test('取消批量删除不发送请求并保留选择', async () => {
+  const h = await pageHarness({ confirm: () => false });
+  const asset = { id: 'batch-delete-cancel', kind: 'image', source: 'upload', name: '不删除.png', size: 100 };
+  h.state.project.assets = [asset]; h.setView('assets'); await h.element('#select-all-assets').click();
+  await h.element('#batch-delete-assets').click();
+  assert.deepEqual([...h.state.assetSelection], [asset.id]);
+  assert.equal(h.requests.some(request => request.method === 'DELETE'), false);
+});
+
+test('批量恢复按素材所属工程保存，部分失败时保留删除列表和失败项供重试', async () => {
+  const other = createProject({ title: '恢复目标工程' }), projects = new Map();
+  let retry = false;
+  const h = await pageHarness({ respond: async (request, current) => {
+    const parts = request.url.split('/'), id = parts[3], assetId = parts[5];
+    assert.equal(request.method, 'POST'); assert.ok(request.url.endsWith('/restore'));
+    if (assetId === 'restore-failure' && !retry) return { $status: 503, error: '稍后重试' };
+    const restored = setAssetDeleted(projects.get(id) || current.state.project, assetId, false);
+    projects.set(id, restored); return restored;
+  } });
+  const deleted = (id, name) => ({ id, name, kind: 'image', source: 'model', size: 100, deletedAt: '2026-10-12T01:00:00Z' });
+  h.state.project.assets = [deleted('restore-current', '当前.png'), deleted('restore-failure', '待重试.png')];
+  other.assets = [deleted('restore-other', '另一工程.png')];
+  h.state.projects = [h.state.project, other]; projects.set(other.id, other);
+  h.setView('assets'); await h.element('#toggle-deleted-assets').click();
+  await h.element('#select-all-assets').click(); await h.element('#batch-restore-assets').click();
+  assert.equal(h.state.project.assets.find(asset => asset.id === 'restore-current').deletedAt, null);
+  assert.equal(h.state.projects.find(project => project.id === other.id).assets[0].deletedAt, null);
+  assert.deepEqual([...h.state.assetSelection], ['restore-failure']);
+  assert.equal(h.state.showDeletedAssets, true);
+  assert.equal(h.element('#batch-restore-assets').hidden, false);
+  retry = true; await h.element('#batch-restore-assets').click();
+  assert.equal(h.state.assetSelection.size, 0); assert.equal(h.state.showDeletedAssets, false);
+  assert.equal(h.requests.some(request => /image-jobs|\/jobs/.test(request.url)), false);
+});
+
+test('批量删除过程中切换工程会停止后续请求并把已删除记录保存在原工程', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const h = await pageHarness({ respond: async (request, current) => {
+    const original = structuredClone(current.state.project);
+    await pending;
+    return setAssetDeleted(original, request.url.split('/').at(-1), true);
+  } });
+  h.state.project.assets = ['stop-one', 'stop-two'].map(id => ({ id, kind: 'image', source: 'upload', name: id + '.png', size: 100 }));
+  const originalId = h.state.project.id;
+  h.setView('assets'); await h.element('#select-all-assets').click();
+  const deleting = h.element('#batch-delete-assets').click();
+  await until(() => h.requests.some(request => request.method === 'DELETE'));
+  const next = createProject({ title: '切换后工程' }); h.setProject(next);
+  release(); await deleting;
+  assert.equal(h.state.project.id, next.id);
+  assert.equal(h.requests.filter(request => request.method === 'DELETE').length, 1);
+  assert.equal(h.state.projects.find(project => project.id === originalId).assets.filter(asset => asset.deletedAt).length, 1);
+  assert.match(h.element('#toast').textContent, /剩余操作已停止/);
+});
+
+function mockAssetPlacement(h) {
+  h.canvas.addAsset = (asset, point, options) => {
+    const node = createAssetCanvasNode(asset, h.state.project.graph, point);
+    h.state.project.graph.nodes.push(node); h.state.dirty.add('graph');
+    h.canvasCalls.push({ action: 'addAsset', asset: structuredClone(asset), options }); return node;
+  };
+}
+
+test('批量放置复用既有素材并跳过已在画布的素材，不提交生成请求', async () => {
+  const h = await pageHarness();
+  const existing = { id: 'batch-place-existing', kind: 'image', source: 'upload', name: '已有画布.png', size: 100 };
+  const fresh = { id: 'batch-place-fresh', kind: 'video', source: 'model', name: '新视频.mp4', size: 100 };
+  h.state.project.assets = [existing, fresh];
+  h.state.project.graph.nodes = [{ id: 'existing-node', kind: 'image', label: existing.name, assetId: existing.id, assetName: existing.name,
+    sceneId: '', x: 0, y: 0, width: 300, height: 200, status: 'uploaded', note: '' }];
+  mockAssetPlacement(h);
+  h.setView('assets'); await h.element('#select-all-assets').click();
+  await h.element('#batch-place-assets').click();
+  assert.equal(h.state.project.graph.nodes.filter(node => node.assetId === fresh.id).length, 1);
+  assert.equal(h.state.assetSelection.size, 0, '成功放置和已存在项都会从选择中移除');
+  assert.equal(h.requests.some(request => request.method === 'POST'), false, '批量放置不能触发生图或视频生成');
+  assert.equal(h.state.view, 'assets', '批量处理保留当前页面');
+  assert.equal(h.requests.filter(request => request.method === 'PATCH').length, 1, '新增卡片必须保存');
+  const options = h.canvasCalls.find(call => call?.action === 'addAsset').options;
+  assert.equal(options.allowRelink, false); assert.equal(options.avoidOverlap, true);
+});
+
+test('跨工程批量放置读取最新画布并保留当前工程、输入草稿和已有节点，新卡片不重叠', async () => {
+  const other = createProject({ title: '另一工程最新画布' }), projects = new Map();
+  const h = await pageHarness({ respond: async request => {
+    const id = request.url.split('/')[3], project = projects.get(id);
+    assert.ok(project);
+    if (request.method === 'PATCH') {
+      const updated = updateProject(project, request.body); projects.set(id, updated); return updated;
+    }
+    return project;
+  } });
+  const asset = id => ({ id, kind: 'image', source: 'model', name: id + '.png', size: 100 });
+  h.state.project.assets = [asset('place-local')]; other.assets = [asset('place-remote-a'), asset('place-remote-b')];
+  h.state.projects = [structuredClone(h.state.project), structuredClone(other)];
+  projects.set(h.state.project.id, structuredClone(h.state.project));
+  other.revision = 9;
+  other.graph.nodes = [{ id: 'remote-note', kind: 'text', label: '远端最新便签', note: '保留远端文字',
+    x: 0, y: 0, width: 320, height: 260 }];
+  projects.set(other.id, structuredClone(other));
+  h.state.project.title = '未保存的工程名称'; h.state.dirty.add('title');
+  h.element('#image-page-prompt').value = '尚未生成的图片草稿';
+  h.element('#image-page-model').value = 'image-b'; h.element('#image-page-count').value = '3';
+  h.element('#text-chat-input').value = '尚未发送的聊天草稿';
+  mockAssetPlacement(h);
+  h.setView('results'); h.element('#result-sort').value = 'oldest';
+  await h.element('#select-all-results').click();
+  const currentId = h.state.project.id;
+  await h.element('#batch-place-results').click();
+  assert.equal(h.state.project.id, currentId); assert.equal(h.state.view, 'results');
+  assert.equal(h.state.project.title, '未保存的工程名称');
+  assert.equal(projects.get(currentId).title, '未保存的工程名称');
+  assert.equal(h.element('#image-page-prompt').value, '尚未生成的图片草稿');
+  assert.equal(h.element('#image-page-model').value, 'image-b'); assert.equal(h.element('#image-page-count').value, '3');
+  assert.equal(h.element('#text-chat-input').value, '尚未发送的聊天草稿');
+  assert.equal(h.element('#result-sort').value, 'oldest');
+  assert.equal(h.state.resultSelection.size, 0);
+  const remotePatch = h.requests.find(request => request.method === 'PATCH' && request.url.endsWith('/' + other.id));
+  assert.equal(remotePatch.body.revision, 9, '使用 GET 获得的最新版本');
+  const nodes = projects.get(other.id).graph.nodes;
+  assert.equal(nodes.find(node => node.id === 'remote-note').note, '保留远端文字');
+  assert.equal(nodes.length, 3);
+  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) assert.equal(intersectsRect(nodes[i], nodes[j]), false);
+  assert.equal(h.requests.some(request => request.method === 'POST'), false);
+});
+
+test('其他工程画布保存冲突时保留选择，不覆盖缓存或远端画布', async () => {
+  const other = createProject({ title: '发生冲突的工程' });
+  other.assets = [{ id: 'conflict-asset', kind: 'image', source: 'model', name: '保留.png', size: 100 }];
+  const original = structuredClone(other.graph);
+  const h = await pageHarness({ respond: async request => request.method === 'PATCH'
+    ? { $status: 409, error: '工程已在其他窗口更新，请刷新后继续编辑。' } : other });
+  const currentId = h.state.project.id;
+  h.state.projects = [h.state.project, other]; h.setView('results');
+  await h.element('#select-all-results').click(); await h.element('#batch-place-results').click();
+  assert.equal(h.state.project.id, currentId);
+  assert.deepEqual([...h.state.resultSelection], ['conflict-asset']);
+  assert.deepEqual(other.graph, original);
+  assert.deepEqual(h.state.projects.find(project => project.id === other.id).graph, original);
+  assert.match(h.element('#toast').textContent, /1 个未保存，已保留选择/);
+  assert.equal(h.requests.filter(request => request.method === 'PATCH').length, 1, '冲突不能自动覆盖');
+});
+
+test('其他工程画布达到容量上限时跳过新增并保留选择，已有素材仍可识别', async () => {
+  const other = createProject({ title: '已满画布' });
+  other.assets = ['capacity-existing', 'capacity-new'].map(id => ({ id, kind: 'image', source: 'model', name: id + '.png', size: 100 }));
+  other.graph.nodes = Array.from({ length: 60 }, (_, index) => ({ id: 'capacity-' + index, kind: index === 0 ? 'image' : 'text',
+    assetId: index === 0 ? 'capacity-existing' : '', label: '已有卡片', x: index * 400, y: 0, width: 320, height: 260 }));
+  const h = await pageHarness({ respond: async () => other });
+  h.state.projects = [h.state.project, other]; h.setView('results');
+  await h.element('#select-all-results').click(); await h.element('#batch-place-results').click();
+  assert.deepEqual([...h.state.resultSelection], ['capacity-new']);
+  assert.equal(other.graph.nodes.length, 60);
+  assert.equal(h.requests.some(request => request.method !== 'GET'), false);
+  assert.match(h.element('#toast').textContent, /1 个已在画布.*1 个因容量/);
 });
 
 test('独立图片页提交使用图片接口并刷新任务，不依赖视频生成项或修改旧弹窗输入', async () => {
@@ -1098,4 +1393,80 @@ test('画布批量生图确认中断后按 batchOperationId 找回原任务而�
   assert.equal(h.state.submitting.has('image:' + imageNode.id), false);
   const savedNode = h.state.project.graph.nodes.find(node => node.id === imageNode.id);
   assert.deepEqual(Array.from(savedNode.imageJobIds), batch.jobs.map(job => job.id));
+});
+
+test('素材库和生成结果按工程分组并支持工程筛选', async () => {
+  const h = await pageHarness();
+  const first = h.state.project;
+  first.title = '工程甲';
+  first.assets = [
+    { id: 'asset-project-a', kind: 'image', source: 'upload', name: '甲参考.png', size: 100 },
+    { id: 'result-project-a', kind: 'image', source: 'model', name: '甲生成.png', size: 100, createdAt: '2026-10-10T01:00:00Z' },
+  ];
+  const second = createProject({ title: '工程乙' });
+  second.assets = [
+    { id: 'asset-project-b', kind: 'image', source: 'upload', name: '乙参考.png', size: 100 },
+    { id: 'result-project-b', kind: 'video', source: 'model', name: '乙生成.mp4', size: 100, createdAt: '2026-10-10T02:00:00Z' },
+  ];
+  h.state.projects = [structuredClone(first), second];
+
+  h.setView('assets');
+  const assets = h.element('#asset-list');
+  assert.match(assets.innerHTML, /project-asset-group[^>]+data-project-id="[^"]+"/);
+  assert.match(assets.innerHTML, /工程甲[\s\S]*甲参考\.png/);
+  assert.match(assets.innerHTML, /工程乙[\s\S]*乙参考\.png/);
+  const assetFilter = h.element('#asset-project-filter');
+  assert.match(assetFilter.innerHTML, /工程甲/);
+  assert.match(assetFilter.innerHTML, /工程乙/);
+  assetFilter.value = second.id;
+  await assetFilter.fire('change', { target: assetFilter });
+  assert.doesNotMatch(assets.innerHTML, /asset-project-a|甲参考/);
+  assert.match(assets.innerHTML, /asset-project-b|乙参考/);
+
+  h.setView('results');
+  const results = h.element('#result-list');
+  assert.match(results.innerHTML, /project-result-group[^>]+data-project-id="[^"]+"/);
+  assert.match(results.innerHTML, /工程甲[\s\S]*result-project-a/);
+  assert.match(results.innerHTML, /工程乙[\s\S]*result-project-b/);
+  const resultFilter = h.element('#result-project-filter');
+  resultFilter.value = second.id;
+  await resultFilter.fire('change', { target: resultFilter });
+  assert.doesNotMatch(results.innerHTML, /result-project-a|甲生成/);
+  assert.match(results.innerHTML, /result-project-b|乙生成/);
+});
+
+test('跨工程结果详情和素材恢复使用素材所属工程', async () => {
+  const firstAssetId = 'same-result-id';
+  const deletedId = 'deleted-project-b';
+  const h = await pageHarness({ respond: async (request, current) => {
+    if (request.method === 'POST' && request.url.endsWith('/api/projects/project-b/assets/' + deletedId + '/restore')) {
+      return { ...current.state.projects.find(project => project.id === 'project-b'),
+        assets: current.state.projects.find(project => project.id === 'project-b').assets.map(asset => asset.id === deletedId ? { ...asset, deletedAt: null } : asset) };
+    }
+    return current.state.project;
+  }});
+  const first = h.state.project;
+  first.title = '当前工程';
+  first.assets = [{ id: firstAssetId, kind: 'image', source: 'model', name: '当前工程结果.png', size: 100, createdAt: '2026-10-10T01:00:00Z' }];
+  const second = createProject({ title: '工程乙' });
+  second.id = 'project-b';
+  second.assets = [
+    { id: firstAssetId, kind: 'image', source: 'model', name: '工程乙结果.png', size: 100, createdAt: '2026-10-10T02:00:00Z' },
+    { id: deletedId, kind: 'image', source: 'upload', name: '工程乙待恢复.png', size: 100, deletedAt: '2026-10-10T03:00:00Z' },
+  ];
+  h.state.projects = [structuredClone(first), second];
+
+  h.setView('results');
+  await h.element('#result-list').fire('click', { target: delegatedTarget('[data-result-details]', { resultDetails: firstAssetId, projectId: second.id }) });
+  assert.equal(h.element('#result-details-title').textContent, '工程乙结果.png');
+  assert.match(h.element('#result-details-content').innerHTML, /工程乙/);
+
+  h.state.showDeletedAssets = true;
+  h.setView('assets');
+  await h.element('#asset-list').fire('click', { target: delegatedTarget('[data-delete-asset],[data-restore-asset]', { restoreAsset: deletedId, projectId: second.id }) });
+  await until(() => h.requests.some(request => request.url.endsWith('/api/projects/project-b/assets/' + deletedId + '/restore'))
+    && h.state.projects.find(project => project.id === second.id)?.assets.find(asset => asset.id === deletedId)?.deletedAt === null);
+  assert.equal(h.requests.at(-1).url, '/api/projects/project-b/assets/' + deletedId + '/restore');
+  assert.equal(h.state.project.id, first.id, '跨工程恢复不应切换当前工程');
+  assert.equal(h.state.projects.find(project => project.id === second.id).assets.find(asset => asset.id === deletedId).deletedAt, null);
 });

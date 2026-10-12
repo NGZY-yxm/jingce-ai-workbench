@@ -87,7 +87,7 @@ test('多参考准备保留素材顺序和用途，校验项目归属与类型�
   assert.throws(() => normalizeScenes([{ references: [{ kind: 'text' }] }]), /图片、视频和音频/);
   assert.equal(updateProject(project, { revision: 1, scenes: [{ references: [references[0], references[0]] }] }).scenes[0].references.length, 1);
   assert.throws(() => normalizeScenes([{ references: 'bad' }]), /格式/);
-  assert.throws(() => updateProject(project, { revision: 1, scenes: [{ references: Array.from({ length: 11 }, () => ({ kind: 'image' })) }] }), /10/);
+  assert.throws(() => updateProject(project, { revision: 1, scenes: [{ references: Array.from({ length: 101 }, () => ({ kind: 'image' })) }] }), /100/);
   assert.equal(project.revision, 1); assert.equal(project.scenes.length, 0);
 });
 
@@ -281,9 +281,9 @@ test('客户端已同步的 graph/scenes PATCH 不会再次按旧编号改写素
   assert.equal(saved.scenes[0].videoPrompt, scenes[0].videoPrompt); assert.equal(saved.scenes[0].promptMentions[0].key, 'node:person-node');
 });
 
-test('十份上限在连线和手动参考合并去重后校验，graph-only 新增第十一份会拒绝', () => {
+test('模型支持三十张图片时，连线和手动参考合并去重后仍可准备全部素材', () => {
   const project = createProject();
-  project.assets = Array.from({ length: 11 }, (_,index) => ({ id: 'asset-' + index, kind: 'image', name: index + '.png' }));
+  project.assets = Array.from({ length: 30 }, (_,index) => ({ id: 'asset-' + index, kind: 'image', name: index + '.png' }));
   const nodes = project.assets.slice(0,10).map((asset,index) => ({ id: 'node-' + index, kind: 'image', assetId: asset.id }));
   nodes.push({ id: 'scene-node', kind: 'video', sceneId: 'one' }, { id: 'duplicate-node', kind: 'image', assetId: 'asset-0' });
   const references = project.assets.slice(0,10).flatMap((asset,index) => [
@@ -294,7 +294,10 @@ test('十份上限在连线和手动参考合并去重后校验，graph-only 新
   const saved = updateProject(project, { revision: project.revision, graph, scenes: [{ id: 'one', references }] });
   assert.equal(saved.scenes[0].references.length, 10); assert.equal(saved.scenes[0].references[0].note, '用途0');
   const extra = { ...saved.graph, nodes: [...saved.graph.nodes, { id: 'node-10', kind: 'image', assetId: 'asset-10' }], links: [...saved.graph.links, canvasLink('node-10')] };
-  assert.throws(() => updateProject(saved, { revision: saved.revision, graph: extra }), /10/);
+  const expanded=updateProject(saved, { revision: saved.revision, graph: extra });
+  assert.equal(expanded.scenes[0].references.length,11);
+  const final=updateProject(expanded,{revision:expanded.revision,scenes:[{...expanded.scenes[0],references:project.assets.map(asset=>({kind:'image',assetId:asset.id}))}]});
+  assert.equal(final.scenes[0].references.length,30);
   assert.equal(saved.scenes[0].references.length, 10);
 });
 

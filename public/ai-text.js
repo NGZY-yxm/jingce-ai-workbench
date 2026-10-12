@@ -1,6 +1,3 @@
-export const AI_OUTPUT_LIMIT = 16000;
-export const AI_INSTRUCTION_LIMIT = 4000;
-
 export const AI_MODES = [
   { id: 'free', label: '自由创作', hint: '根据输入内容继续构思或整理文字。' },
   { id: 'optimize-video', label: '优化视频提示词', hint: '补全主体、动作、运镜、光线和画面风格。' },
@@ -10,7 +7,7 @@ export const AI_MODES = [
 
 const modeIds = new Set(AI_MODES.map(mode => mode.id));
 const statusIds = new Set(['idle', 'running', 'done', 'error']);
-const clean = (value, limit) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
+const clean = (value, limit = Infinity) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
 const number = value => Number.isFinite(Number(value)) ? Math.max(0.5, Math.min(30, Number(value))) : 5;
 
 export function modeRecord(mode) { return AI_MODES.find(item => item.id === mode) || AI_MODES[0]; }
@@ -18,20 +15,24 @@ export function modeRecord(mode) { return AI_MODES.find(item => item.id === mode
 export function normalizeAiConfig(value = {}) {
   const scenes = Array.isArray(value.scenes) ? value.scenes.slice(0, 30).map((scene, index) => ({
     title: clean(scene?.title, 120) || `镜头 ${index + 1}`,
-    description: clean(scene?.description || scene?.visual || scene?.scene, 2000),
-    visual: clean(scene?.visual || scene?.description || scene?.scene, 2000),
-    narration: clean(scene?.narration, 1200),
-    imagePrompt: clean(scene?.imagePrompt, 3000),
-    videoPrompt: clean(scene?.videoPrompt || scene?.prompt, 4000),
+    description: clean(scene?.description || scene?.visual || scene?.scene),
+    visual: clean(scene?.visual || scene?.description || scene?.scene),
+    narration: clean(scene?.narration),
+    imagePrompt: clean(scene?.imagePrompt),
+    videoPrompt: clean(scene?.videoPrompt || scene?.prompt),
     duration: number(scene?.duration),
   })) : [];
   return {
     mode: modeIds.has(value.mode) ? value.mode : 'free',
     model: clean(value.model, 160),
-    instruction: clean(value.instruction, AI_INSTRUCTION_LIMIT),
-    output: clean(value.output, AI_OUTPUT_LIMIT),
+    skillId: clean(value.skillId, 100),
+    instruction: clean(value.instruction),
+    output: clean(value.output),
     status: statusIds.has(value.status) ? value.status : 'idle',
     error: clean(value.error, 400),
+    images: (Array.isArray(value.images) ? value.images : []).filter(image => /^[a-f0-9-]{36}$/.test(image?.requestId)
+      && Number.isSafeInteger(image.index) && image.index >= 0).map(image => ({ requestId: image.requestId,
+        index: image.index, name: clean(image.name, 190) || '对话图片', previewUrl: `/api/text-images/${image.requestId}/${image.index}` })),
     scenes,
     updatedAt: clean(value.updatedAt, 40),
   };
@@ -40,7 +41,7 @@ export function normalizeAiConfig(value = {}) {
 export function buildAiMessages({ mode, instruction = '', inputs = [] }) {
   const selected = modeRecord(mode);
   const source = inputs.filter(item => item && typeof item.text === 'string' && item.text.trim())
-    .map(item => `【${clean(item.label, 120) || '输入'}】\n${clean(item.text, 6000)}`).join('\n\n');
+    .map(item => `【${clean(item.label, 120) || '输入'}】\n${clean(item.text)}`).join('\n\n');
   const system = [
     '你是镜策视频创作工作台中的中文创作助手。',
     '请只依据用户提供的内容创作，不要编造没有依据的品牌事实、人物身份或产品参数。',
@@ -82,7 +83,7 @@ function sceneText(scene, index) {
 }
 
 export function parseAiResponse(mode, content) {
-  const raw = clean(content, AI_OUTPUT_LIMIT);
+  const raw = clean(content);
   if (mode !== 'storyboard') return { output: raw, scenes: [] };
   const parsed = jsonCandidate(raw);
   const source = Array.isArray(parsed) ? parsed : parsed?.scenes;

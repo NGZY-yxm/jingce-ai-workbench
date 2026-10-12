@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -68,6 +68,23 @@ test('便携启动：端口被其他程序占用时选择空闲端口，停止�
   assert.equal(await (await fetch(other.url)).text(), 'other service');
   assert.deepEqual(await stopSharedStudio({ runtimeRoot: path.join(root, 'runtime') }), { stopped: true });
   assert.equal(await (await fetch(other.url)).text(), 'other service');
+});
+
+test('合并工作台：从数据目录的不同入口启动和停止仍复用同一实例', async t => {
+  const root = await temporary(t);
+  const runtimeRoot = path.join(root, 'shared-data');
+  const aliasRoot = path.join(root, '旧入口 runtime');
+  let builds = 0;
+  const studioFactory = async options => { builds++; return createStudio(options); };
+  const first = await launch(t, runtimeRoot, { studioFactory });
+  await symlink(runtimeRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  const second = await startSharedStudio({ runtimeRoot: aliasRoot, preferredPort: 0, studioOptions, studioFactory });
+  assert.equal(second.reused, true);
+  assert.equal(second.url, first.url);
+  assert.equal(builds, 1);
+  assert.equal((await readOwnedSession({ runtimeRoot: aliasRoot })).url, first.url);
+  assert.deepEqual(await stopSharedStudio({ runtimeRoot: aliasRoot }), { stopped: true });
+  assert.equal(await readOwnedSession({ runtimeRoot }), null);
 });
 
 test('便携多副本：同一偏好端口分别运行，停止 B 不会停止 A', async t => {

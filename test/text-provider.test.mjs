@@ -34,7 +34,7 @@ test('语言模型对话发送最小 Chat Completions 请求并读取回复', as
     assert.deepEqual(JSON.parse(options.body), {
       model: 'model-a',
       messages: [
-        { role: 'system', content: '你是一个简洁的创作助手。\n\n请直接给出最终结果，不要反问，不要要求用户选择方案，不要调用工具。回复必须包含文本内容；若任务要求 JSON，请严格返回指定格式的 JSON。' },
+        { role: 'system', content: '你是一个简洁的创作助手。\n\n请直接给出最终结果，不要反问，不要要求用户选择方案，不要调用工具。回复应包含文本内容或模型实际支持的图片结果；若任务要求 JSON，请严格返回指定格式的 JSON。' },
         { role: 'user', content: '请给我一句开场白。' },
       ],
       stream: false,
@@ -94,7 +94,7 @@ test('文字模型超时给出明确诊断且不暴露原始网络错误', async
   }), error => {
     assert.equal(error.status, 504);
     assert.equal(error.code, 'TEXT_REQUEST_TIMEOUT');
-    assert.match(error.message, /120 秒/);
+    assert.match(error.message, /中断/);
     assert.doesNotMatch(error.message, /socket details/);
     return true;
   });
