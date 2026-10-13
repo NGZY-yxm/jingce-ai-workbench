@@ -584,7 +584,7 @@ body:has(#creative-canvas.canvas-expanded) #toast { z-index: 130; left: 50%; }
 .cover-card > .canvas-node-header, .cover-card .canvas-hover-details, .cover-card > .canvas-port, .cover-card > .canvas-node-resize { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .12s ease, visibility .12s ease; }
 .cover-card:is(:hover, :focus-within, .is-playing, .details-open) { z-index: 20; }
 .cover-card:is(:hover, :focus-within, .is-playing, .details-open) > .canvas-node-header,
-.cover-card:is(:hover, :focus-within, .is-playing, .details-open) .canvas-hover-details,
+.cover-card.details-open .canvas-hover-details,
 .cover-card:is(:hover, :focus-within, .is-playing, .details-open) > .canvas-port,
 .cover-card:is(:hover, :focus-within, .is-playing, .details-open) > .canvas-node-resize { opacity: 1; visibility: visible; pointer-events: auto; }
 #canvas-viewport.connecting .cover-card > .canvas-port { opacity: 1; visibility: visible; pointer-events: auto; }

@@ -1,5 +1,6 @@
 import { videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote } from './video-parameters.js';
 import { createInfiniteCanvas, createAssetCanvasNode } from './canvas.js';
+import { createSpeechWorkspace } from './speech.js';
 import { resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, withoutSceneReferenceLinks, detachAssetReferences } from './reference-model.js';
 import { referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities } from './reference-api.js';
 import { createCapabilityEditor } from './capability-editor.js';
@@ -11,6 +12,8 @@ import { buildAiMessages, normalizeAiConfig, parseAiResponse } from './ai-text.j
 import { renderTextMarkdown } from './text-markdown.js';
 import { createSkillLibrary, skillOptions } from './skills.js';
 import { imageHistoryContent } from './chat-images.js';
+import { createPrevisWorkflow } from './previs.js';
+import { thumbnailUrl, assetThumbnailUrl } from './media-thumbnails.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -71,7 +74,7 @@ function initTheme() {
 }
 initTheme();
 const state = { token: '', projects: [], deletedProjects: [], project: null, saved: null, settings: {}, catalog: [], catalogError: '', catalogWarning: '', catalogDiagnostics: null, imageCatalog: [], imageCatalogError: '', textCatalog: [], textCatalogError: '', kinds: {}, tools: {},
-  skills: [], textSkillId: '', textRequestId: '', jobs: [], imageJobs: [], imageReferenceIds: [], assetSelection: new Set(), resultSelection: new Set(), textMessages: [], textError: '', textBusy: false, showDeletedJobs: false, showDeletedImageJobs: false, showDeletedAssets: false, view: 'overview', dirty: new Set(), versions: {}, saveTask: null, saveTimer: null, saveError: null,
+  skills: [], textSkillId: '', textRequestId: '', jobs: [], imageJobs: [], speechJobs: [], speechVoices: [], imageReferenceIds: [], assetSelection: new Set(), resultSelection: new Set(), textMessages: [], textError: '', textBusy: false, showDeletedJobs: false, showDeletedImageJobs: false, showDeletedAssets: false, view: 'overview', dirty: new Set(), versions: {}, saveTask: null, saveTimer: null, saveError: null,
   pollBusy: false, catalogBusy: false, catalogChanging: 0, catalogRequestId: 0, pendingCatalog: null, switching: false, submitting: new Set(), aiBusy: new Set(), imageOperations: new Map(), videoOperations: loadVideoOperations() };
 let newProjectView = 'canvas';
 let resultDetailsSelection = null, selectedChatText = '';
@@ -93,9 +96,31 @@ function setCanvasTextDocked(docked) {
 const canvas = createInfiniteCanvas({ getState: () => state, mark, flush, toast, setView, parameters, modelForScene, referencesFor,
   generateScene, generateImageCard, retryImageCard, refreshImageJobs, createScene, selectAsset, selectImageCandidate, uploadFiles, previewAsset,
   aiInputs: aiInputsForNode, runAiNode, isAiBusy: nodeId => state.aiBusy.has(nodeId), icon: name => uiIcon(name), setTextChatDocked: setCanvasTextDocked,
-  openSkills: () => setView('skills'), importChatImage, aiImagesMarkup: node => chatImageMarkup(normalizeAiConfig(node.aiConfig)) });
+  openSkills: () => setView('skills'), openSpeech: (text, association) => speech.open(text, association),
+  api, refreshSpeechJobs: () => speech.reconcileFromCanvas(), submitSpeechCard: (nodeId, value) => speech.submitFromCanvas(nodeId, value),
+  loadSpeechVoices: model => speech.loadVoices(model), speechPendingForNode: nodeId => speech.pendingForNode(nodeId),
+  openSpeechConnections, importChatImage, aiImagesMarkup: node => chatImageMarkup(normalizeAiConfig(node.aiConfig)) });
+const speech = createSpeechWorkspace({ api, getState: () => state, flush, adoptRemote, toast, setView,
+  openConnections: openSpeechConnections, addAsset: asset => canvas.addAsset(asset),
+  onVoicesChanged: voices => { state.speechVoices = voices; if (state.view === 'canvas') canvas.render(); },
+  onJobsChanged: jobs => {
+    const previous = JSON.stringify((state.speechJobs || []).map(job => [job.id, job.state, job.assetId, job.message]));
+    state.speechJobs = jobs;
+    if (state.view === 'canvas' && previous !== JSON.stringify(jobs.map(job => [job.id, job.state, job.assetId, job.message]))) canvas.render();
+  } });
 const skillLibrary = createSkillLibrary({ document, api, getState: () => state, toast, icon: uiIcon,
   onChange: () => { renderTextChat(); canvas.render(); } });
+const previsWorkflow = createPrevisWorkflow({ document, api, getState: () => state, flush, toast,
+  onProjectUpdate: project => { if (project.id === state.project?.id) adoptRemote(project); else rememberProject(project); },
+  onPlaceAsset: async assetId => { placeAssetOnCanvas(assetId); await flush(); },
+  onUseVideo: async job => {
+    const asset = activeAssets().find(item => item.id === job.videoAssetId && item.kind === 'video');
+    if (!asset) throw new Error('预演视频已删除，请在素材库恢复后再使用。');
+    const scene = createScene(`参考预演视频的路线与构图，保持动作节拍和空间方向。${job.spec.beats.map(beat => `${beat.time}秒：${beat.label}`).join('；')}。一镜到底，无切镜。`, job.spec.name + ' · 成片');
+    scene.duration = Math.min(30, job.spec.duration); scene.generationDuration = Math.min(15, job.spec.duration); scene.ratio = job.spec.ratio;
+    scene.references = [{ kind: 'video', assetId: asset.id, name: asset.name, note: '摄影机路线、空间布局和动作节拍参考' }];
+    mark('scenes'); await flush(); setView('videos'); toast('已创建视频生成项并选中预演参考，请选择支持视频参考的模型后再提交。');
+  } });
 
 class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
@@ -131,7 +156,7 @@ function setProject(project) {
   projectContextRevision++;
   canvas.setExpanded?.(false);
   closeResultDetails();
-  state.project = clone(project); state.saved = clone(project); state.jobs = []; state.imageJobs = []; state.showDeletedJobs = false; state.showDeletedImageJobs = false; state.showDeletedAssets = false;
+  state.project = clone(project); state.saved = clone(project); state.jobs = []; state.imageJobs = []; state.speechJobs = []; state.showDeletedJobs = false; state.showDeletedImageJobs = false; state.showDeletedAssets = false;
   state.assetSelection.clear(); state.resultSelection.clear();
   state.dirty.clear(); state.saveError = null;
   state.versions = {};
@@ -151,7 +176,7 @@ function setProject(project) {
   if ($('#result-sort')) $('#result-sort').value = 'newest';
   if ($('#asset-project-filter')) $('#asset-project-filter').value = 'all';
   if ($('#result-project-filter')) $('#result-project-filter').value = 'all';
-  canvas.reset(); renderAll(); saveLabel(project ? '已保存到本机' : '请选择或新建工程');
+  canvas.reset(); speech.render(); renderAll(); saveLabel(project ? '已保存到本机' : '请选择或新建工程');
 }
 function loadTextHistory(projectId) {
   if (!projectId) return [];
@@ -338,9 +363,9 @@ function renderOverview() {
   host.innerHTML = projects.length ? projects.map(project => {
     const assets = (project.assets || []).filter(asset => !asset.deletedAt);
     const cover = [...assets].reverse().find(asset => asset.kind === 'image') || assets.find(asset => asset.kind === 'video');
-    const source = cover ? `/api/assets/${encodeURIComponent(cover.id)}` : '';
+    const source = cover ? assetThumbnailUrl(cover.id) : '';
     const preview = cover?.kind === 'image' ? `<img src="${source}" alt="${escapeHtml(project.title)}" loading="lazy">`
-      : cover?.kind === 'video' ? `<video src="${source}#t=0.1" muted playsinline preload="auto" aria-label="${escapeHtml(project.title)}"></video>`
+      : cover?.kind === 'video' ? `<img src="${source}" alt="${escapeHtml(project.title)}" loading="lazy"><span class="project-cover-play" aria-hidden="true">▶</span>`
       : `<div class="project-cover-empty">${uiIcon('Workflow')}<span>创作画布</span></div>`;
     const disabled = state.switching ? ' disabled' : '';
     return `<article class="overview-project-card"><button class="overview-project-open" data-open-project="${escapeHtml(project.id)}" aria-label="打开工程：${escapeHtml(project.title)}"${disabled}><div class="project-cover">${preview}<span class="project-open-hint">打开画布 ${uiIcon('ArrowUpRight')}</span></div><div class="project-card-copy"><h3 title="${escapeHtml(project.title)}">${escapeHtml(project.title)}</h3><p>${(project.scenes || []).length} 个视频 · ${assets.length} 份素材</p><time datetime="${escapeHtml(project.updatedAt)}">${escapeHtml(new Date(project.updatedAt).toLocaleDateString('zh-CN'))} 更新</time></div></button><button class="project-card-delete" data-delete-overview-project="${escapeHtml(project.id)}" title="移到已删除工程" aria-label="删除工程：${escapeHtml(project.title)}"${disabled}>${uiIcon('Trash2')}</button></article>`;
@@ -395,7 +420,7 @@ async function recoverUnavailableProject(id, error) {
 }
 function activeAssets() { return (state.project?.assets || []).filter(asset => !asset.deletedAt); }
 function generatedAssets() {
-  return activeAssets().filter(asset => asset.source === 'model' && ['image', 'video'].includes(asset.kind));
+  return activeAssets().filter(asset => asset.source === 'model' && ['image', 'video', 'audio'].includes(asset.kind));
 }
 function projectRecords() {
   const records = new Map();
@@ -411,7 +436,7 @@ function projectForId(projectId) {
 function assetEntries({ deleted = false, generated = false } = {}) {
   return projectRecords().flatMap(project => (project.assets || [])
     .filter(asset => Boolean(asset.deletedAt) === deleted)
-    .filter(asset => !generated || asset.source === 'model' && ['image', 'video'].includes(asset.kind))
+    .filter(asset => !generated || asset.source === 'model' && ['image', 'video', 'audio'].includes(asset.kind))
     .map(asset => ({ asset, project, projectId: project.id, projectTitle: project.title || '未命名工程' })));
 }
 function findAssetEntry(assetId, projectId = '', options = {}) {
@@ -465,7 +490,7 @@ function renderBrief() {
 }
 function setView(view) {
   view = ({ scenes: 'videos', delivery: 'results' })[view] || view;
-  if (!['overview', 'canvas', 'assets', 'images', 'videos', 'results', 'text', 'skills'].includes(view)) view = 'overview';
+  if (!['overview', 'canvas', 'assets', 'images', 'videos', 'results', 'text', 'skills', 'previs', 'speech'].includes(view)) view = 'overview';
   if (!['overview', 'skills'].includes(view) && !state.project) { openNewProject(view); return; }
   if (view !== state.view) clearTextSelectionActions();
   if (state.view === 'canvas' && view !== 'canvas') { canvas.finishEditing(); canvas.setExpanded?.(false); }
@@ -473,7 +498,7 @@ function setView(view) {
   state.view = view;
   try { localStorage.setItem('jingce-active-view', view); } catch {}
   document.body.dataset.view = view;
-  $('#current-view-name').textContent = { overview: '项目总览', canvas: '创作画布', assets: '素材库', images: '图片生成', videos: '视频生成', results: '生成结果', text: '创作助手', skills: '技能库' }[view];
+  $('#current-view-name').textContent = { overview: '项目总览', canvas: '创作画布', assets: '素材库', images: '图片生成', videos: '视频生成', results: '生成结果', text: '创作助手', skills: '技能库', previs: 'Blender 预演', speech: '语音生成' }[view];
   $$('.view').forEach(element => element.classList.toggle('hidden', element.id !== `${view}-view`));
   $$('.tab').forEach(button => { const active = button.dataset.view === view; button.classList.toggle('active', active); button.setAttribute('aria-selected', active); });
   if (view === 'overview') { renderOverview(); return; }
@@ -483,13 +508,16 @@ function setView(view) {
   if (view === 'videos') { renderScenes(); renderJobs(); }
   if (view === 'results') { renderResults(); }
   if (view === 'text') { renderTextChat(); }
+  if (view === 'speech') { speech.render(); }
   if (view === 'skills') { skillLibrary.render(); skillLibrary.refresh().catch(error => toast(error.message, true)); }
+  if (view === 'previs') { previsWorkflow.activate().catch(error => toast(error.message, true)); }
 }
 function renderAll() {
   $('.workspace').classList.toggle('no-project', !state.project);
   $('#empty-workspace').hidden = true;
   renderProjects(); renderCounts(); renderSettingsStatus();
   if (state.project) renderBrief();
+  previsWorkflow.render();
   setView(state.project || state.view === 'skills' ? state.view : 'overview');
 }
 
@@ -703,7 +731,7 @@ function renderReferences(scene, references) {
     <label>从素材库添加（合计最多 ${limit} 份）<select data-reference-picker${!allowed.length ? ' disabled' : ''}>${options([{ value:'',label:references.length >= limit ? '已达到当前模型数量上限' : allowed.length ? '选择当前模型支持的素材…' : available.length ? '现有素材类型或数量不符合当前模型限制' : '请先到素材库上传参考素材' },...available.map(asset=>({value:asset.id,label:`${{image:'图片',video:'视频',audio:'音频'}[asset.kind]} · ${asset.name}`,disabled:!allowed.includes(asset)}))],'')}</select></label>
     <div class="reference-list">${references.map((reference,index)=>{
       const asset=assets.find(asset=>asset.id===reference.assetId),label=referenceLabel(references,index),linked=Boolean(reference.nodeId);
-      const preview=asset ? reference.kind==='image' ? `<img loading="lazy" src="/api/assets/${encodeURIComponent(asset.id)}" alt="${escapeHtml(label)}参考素材">` : `<${reference.kind === 'audio' ? 'audio' : 'video'} controls preload="none" src="/api/assets/${encodeURIComponent(asset.id)}" aria-label="${escapeHtml(label)}参考素材"></${reference.kind === 'audio' ? 'audio' : 'video'}>` : '';
+      const preview=asset ? ['image', 'video'].includes(reference.kind) ? `<button type="button" class="reference-media-thumb" data-preview-asset="${escapeHtml(asset.id)}" aria-label="预览${escapeHtml(label)}参考素材"><img loading="lazy" src="${assetThumbnailUrl(asset.id)}" alt="${escapeHtml(label)}参考素材">${reference.kind === 'video' ? '<span class="result-play" aria-hidden="true">▶</span>' : ''}</button>` : `<audio controls preload="none" src="/api/assets/${encodeURIComponent(asset.id)}" aria-label="${escapeHtml(label)}参考素材"></audio>` : '';
       const replacement=!asset ? `<label class="reference-relink">${escapeHtml(reference.name||label)} · 待补选素材<select data-reference-relink="${index}">${options([{value:'',label:'上传后在这里重新选择素材'},...available.filter(item=>item.kind===reference.kind).map(item=>({value:item.id,label:item.name}))],'')}</select></label>` : '';
       return `<div class="reference-item"><div class="reference-heading"><button type="button" class="reference-insert" data-reference-action="insert" data-reference-index="${index}" title="插入到视频提示词"${asset?'':' disabled'}>@${escapeHtml(label)}</button><span title="${escapeHtml(asset?.name||reference.name||'待补选素材')}">${escapeHtml(asset?.name||reference.name||'待补选素材')}</span><div class="reference-actions"><button type="button" data-reference-action="up" data-reference-index="${index}" aria-label="上移${escapeHtml(label)}"${linked||index===0||references[index-1]?.nodeId?' disabled':''}>↑</button><button type="button" data-reference-action="down" data-reference-index="${index}" aria-label="下移${escapeHtml(label)}"${linked||index===references.length-1||references[index+1]?.nodeId?' disabled':''}>↓</button><button type="button" data-reference-action="remove" data-reference-index="${index}" aria-label="${linked?'断开':'移除'}${escapeHtml(label)}" title="${linked?'断开画布连接':'移除本视频卡片参考'}">×</button></div></div><small class="reference-origin">${linked?'来自画布连线 · 顺序由连接时间决定':'从素材库添加'}</small>${preview}${replacement}${reference.kind === 'image' && modelForScene(scene)?.referenceSupport?.protocol === 'content-v3' ? `<label>图片用途<select data-reference-role="${index}" aria-label="${escapeHtml(label)}图片用途">${options([{value:'reference_image',label:'通用参考图片'},{value:'first_frame',label:'首帧'},{value:'last_frame',label:'尾帧'}],reference.role === 'end_frame' ? 'last_frame' : reference.role || 'reference_image')}</select></label>` : ''}<details class="reference-manual-url"${reference.publicUrl ? ' open' : ''}><summary>手动填写公网链接（可选）</summary><label>平台可访问的素材链接<input type="url" data-reference-url="${index}" aria-label="${escapeHtml(label)}公网素材链接" maxlength="4096" placeholder="https://你的素材域名/原文件" value="${escapeHtml(reference.publicUrl || '')}"></label></details><label>参考用途<textarea data-reference-note="${index}" aria-label="${escapeHtml(label)}参考用途" rows="2" maxlength="1200" placeholder="例如：人物外观、场景、动作或画面运动">${escapeHtml(reference.note)}</textarea></label></div>`;
     }).join('')}</div>
@@ -726,7 +754,7 @@ function renderCandidates(scene, videos) {
     const label = count > 1 ? `候选 ${index}/${count}` : '生成视频';
     const duration = job?.duration || asset?.duration;
     return `<article class="candidate-card${selected ? ' selected' : ''}">
-      ${asset ? `<video controls preload="none" src="/api/assets/${encodeURIComponent(asset.id)}" aria-label="${escapeHtml(label)}预览"></video>` : `<div class="candidate-placeholder"><strong>${escapeHtml(jobLabels[job.state] || job.state)}</strong><p>${escapeHtml(job.message)}</p></div>`}
+      ${asset ? `<button type="button" class="candidate-preview" data-preview-asset="${escapeHtml(asset.id)}" aria-label="预览${escapeHtml(label)}"><img loading="lazy" src="${assetThumbnailUrl(asset.id)}" alt="${escapeHtml(label)}缩略图"><span class="result-play" aria-hidden="true">▶</span></button>` : `<div class="candidate-placeholder"><strong>${escapeHtml(jobLabels[job.state] || job.state)}</strong><p>${escapeHtml(job.message)}</p></div>`}
       <div class="candidate-info"><strong>${escapeHtml(label)}${duration ? ` · ${duration} 秒` : ''}</strong><small>${escapeHtml(new Date(job?.createdAt || asset.createdAt).toLocaleString('zh-CN'))}</small>
       ${asset ? `<div class="candidate-actions"><button type="button" class="${selected ? 'button' : 'primary'} full" data-scene-action="select-candidate" data-asset-id="${escapeHtml(asset.id)}"${selected ? ' disabled' : ''}>${selected ? '✓ 当前结果' : '设为当前结果'}</button><button type="button" class="button full" data-scene-action="place-asset" data-asset-id="${escapeHtml(asset.id)}">放到画布作为参考</button></div><a class="candidate-download" href="/api/assets/${encodeURIComponent(asset.id)}?download=1" download>下载视频</a>` : `<small>${escapeHtml(job.model)}</small>`}</div></article>`;
   }).join('')}</div></section>`;
@@ -752,7 +780,7 @@ function renderScenes() {
     return `<article class="scene-card" data-scene-id="${escapeHtml(scene.id)}"><div class="scene-heading"><span class="scene-number">${String(index + 1).padStart(2, '0')}</span><input data-scene-field="title" aria-label="视频生成项 ${index + 1} 标题" value="${escapeHtml(scene.title)}" maxlength="120"><div class="scene-actions"><button data-scene-action="up" title="上移视频生成项"${index === 0 ? ' disabled' : ''}>↑</button><button data-scene-action="down" title="下移视频生成项"${index === project.scenes.length - 1 ? ' disabled' : ''}>↓</button><button data-scene-action="remove" title="删除视频生成项">×</button></div></div>
       <div class="video-generation-layout"><div class="video-generation-main"><div class="scene-prompts reference-prompt-editor"><label>视频提示词 <span class="prompt-at-hint">输入 @ 选择参考素材</span><textarea data-scene-field="videoPrompt" data-reference-prompt rows="6" maxlength="4000" aria-label="视频生成项 ${index + 1} 视频提示词" placeholder="直接描述画面、人物动作、镜头运动与风格">${escapeHtml(scene.videoPrompt)}</textarea></label><div class="reference-mention-menu" role="listbox" aria-label="本视频卡片参考素材" hidden></div><p class="honest-note prompt-validation" data-prompt-validation${invalid.length ? '' : ' hidden'}>${escapeHtml(invalid[0]?.message || '')}</p></div>
         <details class="video-reference-settings"${references.length ? ' open' : ''}><summary>参考素材 <span>${references.length ? `已选择 ${references.length} 份` : '可选 · 添加图片、视频或音频'}</span></summary>${renderReferences(scene, references)}</details></div>
-      <aside class="video-generation-preview"><div class="scene-preview">${video ? `<video controls preload="metadata" playsinline src="/api/assets/${encodeURIComponent(video.id)}"></video>` : image ? `<img src="/api/assets/${encodeURIComponent(image.id)}" alt="已选参考图片">` : '<span>生成后在这里预览视频</span>'}</div><p class="honest-note">${video ? '当前视频结果，可下载或连接到其他视频卡片作为参考。' : image ? '已选参考图 · 视频生成后可在这里预览。' : '每次生成的结果都会保存在“生成结果”中。'}</p></aside></div>
+      <aside class="video-generation-preview"><div class="scene-preview">${video ? `<button type="button" class="scene-media-thumb" data-preview-asset="${escapeHtml(video.id)}" aria-label="预览当前视频"><img loading="lazy" src="${assetThumbnailUrl(video.id)}" alt="当前视频缩略图"><span class="result-play" aria-hidden="true">▶</span></button>` : image ? `<button type="button" class="scene-media-thumb" data-preview-asset="${escapeHtml(image.id)}" aria-label="预览参考图片"><img loading="lazy" src="${assetThumbnailUrl(image.id)}" alt="已选参考图片"></button>` : '<span>生成后在这里预览视频</span>'}</div><p class="honest-note">${video ? '当前视频结果，可下载或连接到其他视频卡片作为参考。' : image ? '已选参考图 · 视频生成后可在这里预览。' : '每次生成的结果都会保存在“生成结果”中。'}</p></aside></div>
       <div class="video-generation-controls">${Object.entries(controls).map(([field, config]) => `<label${field === 'videoModel' ? ' class="video-model-control"' : ''}>${config.label}<select data-scene-field="${field}"${config.disabled ? ' disabled' : ''}>${options(config.options, config.value)}</select></label>`).join('')}</div>
       <div class="video-generation-footer"><div class="cost-line"><strong>${escapeHtml(cost)}</strong><small>${escapeHtml(videoPricingNote(p))}</small><button type="button" class="text-button" data-model-capability="video" data-capability-model="${escapeHtml(p.model?.name || '')}">查看 / 补充模型能力</button></div><button class="primary" data-scene-action="generate"${disabled ? ' disabled' : ''}>${state.submitting.has(scene.id) ? '提交中…' : pending ? '核对上次提交 ↗' : invalid.length ? '请修正素材引用' : referenceIssue ? '请完善参考设置' : `${state.jobs.some(job => job.sceneId === scene.id) || video ? '再次生成' : '生成'} ${p.count} 个视频 ↗`}</button></div>
       <p class="honest-note" data-generation-note>${escapeHtml(sceneGenerationNote(active, p, references, invalid, referenceIssue))}</p>${renderCandidates(scene, videos)}</article>`;
@@ -970,7 +998,7 @@ function renderImageReferences() {
   const available = images.filter(asset => !state.imageReferenceIds.includes(asset.id));
   picker.innerHTML = options([{value:'',label:available.length ? '选择已上传或已生成的图片…' : '没有可添加的图片，请先上传'},...available.map(asset=>({value:asset.id,label:(asset.source === 'model' ? '已生成 · ' : '已上传 · ') + asset.name}))],'');
   picker.disabled = state.imageReferenceIds.length >= limit || !available.length;
-  list.innerHTML = state.imageReferenceIds.length ? imagePageReferences().map((reference,index) => `<div class="image-reference-card${reference.assetId ? '' : ' unavailable'}">${reference.assetId ? `<button type="button" class="image-reference-thumb" data-preview-asset="${escapeHtml(reference.assetId)}" aria-label="预览参考图片 ${index+1}"><img loading="lazy" src="/api/assets/${encodeURIComponent(reference.assetId)}" alt="${escapeHtml(reference.name)}"></button>` : '<div class="image-reference-thumb">图片不可用</div>'}<div class="image-reference-info"><strong>参考图片 ${index+1}</strong><span title="${escapeHtml(reference.name)}">${escapeHtml(reference.name)}</span></div><button type="button" class="button" data-remove-image-reference="${escapeHtml(reference.requestedAssetId)}" aria-label="移除参考图片 ${index+1}">×</button></div>`).join('') : '<p class="image-reference-empty">未选择参考图，将根据提示词生成图片。</p>';
+  list.innerHTML = state.imageReferenceIds.length ? imagePageReferences().map((reference,index) => `<div class="image-reference-card${reference.assetId ? '' : ' unavailable'}">${reference.assetId ? `<button type="button" class="image-reference-thumb" data-preview-asset="${escapeHtml(reference.assetId)}" aria-label="预览参考图片 ${index+1}"><img loading="lazy" src="${assetThumbnailUrl(reference.assetId)}" alt="${escapeHtml(reference.name)}"></button>` : '<div class="image-reference-thumb">图片不可用</div>'}<div class="image-reference-info"><strong>参考图片 ${index+1}</strong><span title="${escapeHtml(reference.name)}">${escapeHtml(reference.name)}</span></div><button type="button" class="button" data-remove-image-reference="${escapeHtml(reference.requestedAssetId)}" aria-label="移除参考图片 ${index+1}">×</button></div>`).join('') : '<p class="image-reference-empty">未选择参考图，将根据提示词生成图片。</p>';
   const issue = imagePageIssue(), note = $('#image-page-reference-note');
   if (note) { note.textContent = issue || (state.imageReferenceIds.length ? `已选择 ${state.imageReferenceIds.length} 张参考图，按添加顺序发送。选择图片和编辑提示词不会提交生成。` : '上传图片或选择已生成图片作为参考，继续创作新图。'); note.classList.toggle('error',Boolean(issue)); }
 }
@@ -1054,7 +1082,7 @@ function renderImageJobs() {
     const scene = state.project.scenes.find(item => item.id === job.sceneId);
     const node = state.project.graph.nodes.find(node => node.id === job.nodeId);
     const retry = job.state === 'download_pending';
-    const preview = job.state === 'done' && job.assetId ? `<img class="image-job-preview" loading="lazy" src="/api/assets/${encodeURIComponent(job.assetId)}" alt="生成图片">` : '<span class="image-job-preview-placeholder">✦</span>';
+    const preview = job.state === 'done' && job.assetId ? `<img class="image-job-preview" loading="lazy" src="${assetThumbnailUrl(job.assetId)}" alt="生成图片">` : '<span class="image-job-preview-placeholder">✦</span>';
     const actions = `${job.state === 'done' && job.assetId ? `<button class="button" data-preview-image-job="${escapeHtml(job.assetId)}">预览</button><a class="button" href="/api/assets/${encodeURIComponent(job.assetId)}?download=1" download>下载图片</a>` : ''}${retry ? `<button class="button" data-retry-image-job="${escapeHtml(job.id)}">重试保存</button>` : ''}${job.deletedAt ? `<button class="button" data-restore-image-job="${escapeHtml(job.id)}">恢复记录</button><button class="button project-danger" data-permanent-image-job="${escapeHtml(job.id)}"${!['done', 'failed'].includes(job.state) ? ' disabled title="请先处理完任务再彻底删除"' : ''}>彻底删除</button>` : `<button class="button delete-job" data-delete-image-job="${escapeHtml(job.id)}">删除记录</button>`}`;
     return `<article class="job-row image-job-row"><div class="image-job-thumb">${preview}</div><div class="job-main"><strong>${escapeHtml(node?.label || scene?.title || (job.nodeId ? '已移除的生图卡片' : '通用生图'))} · ${escapeHtml(job.model)}</strong><p class="image-job-prompt">${escapeHtml(job.prompt)}</p><p>${escapeHtml(new Date(job.createdAt).toLocaleString('zh-CN'))}${job.count > 1 ? ` · 候选 ${job.variantIndex || 1} / ${job.count}` : ''}${job.referenceAssetIds?.length ? ` · ${job.referenceAssetIds.length} 张参考图` : ''}${job.message ? ` · ${escapeHtml(job.message)}` : ''}</p>${job.deletedAt ? `<p>删除于 ${escapeHtml(new Date(job.deletedAt).toLocaleString('zh-CN'))}</p>` : ''}</div><span class="job-label">${escapeHtml(imageJobLabels[job.state] || job.state)}</span><div class="job-actions">${actions}</div></article>`;
   }).join('') : '<div class="empty-state" style="padding:25px">暂无图片任务。填写上方图片提示词并提交，或在创作画布添加“生图”卡片。</div>';
@@ -1310,7 +1338,7 @@ async function downloadSelectedAssets(kind, button) {
     if (!downloaded) throw new Error('所选文件均未能下载，请稍后重试。');
     const blob = await archive.generateAsync({ type: 'blob', compression: 'STORE' });
     const url = URL.createObjectURL(blob), anchor = document.createElement('a');
-    anchor.href = url; anchor.download = `镜策-${kind === 'results' ? '生成结果' : '素材'}-${downloaded}个.zip`;
+    anchor.href = url; anchor.download = `幻帧 MiraFrame-${kind === 'results' ? '生成结果' : '素材'}-${downloaded}个.zip`;
     document.body.append(anchor); anchor.click(); anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
     toast(failures.length ? `已打包 ${downloaded} 个文件，${failures.length} 个未能下载：${failures.slice(0, 2).join('、')}。` : `已打包下载 ${downloaded} 个文件。`, Boolean(failures.length));
@@ -1431,7 +1459,7 @@ function renderAssets() {
   $('#asset-history-note').textContent = '这里的素材已从库中移除，原文件仍保留。恢复后可重新选择或关联；已断开的视频生成项和画布引用不会自动恢复。';
   updateAssetSelectionUi(assets.map(entry => entry.asset));
   const groups = groupAssetEntries(assets);
-  $('#asset-list').innerHTML = assets.length ? groups.map(({ project, entries }) => `<section class="project-asset-group" data-project-id="${escapeHtml(project.id)}"><div class="project-group-heading"><h3 title="${escapeHtml(project.title || '未命名工程')}">${escapeHtml(project.title || '未命名工程')}</h3><span>${entries.length} 份素材</span></div><div class="asset-grid project-group-grid">${entries.map(({ asset, projectId }) => `<article class="asset-card${state.assetSelection.has(asset.id) ? ' selected' : ''}" data-asset-id="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"><label class="asset-select"><input type="checkbox" data-select-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"${state.assetSelection.has(asset.id) ? ' checked' : ''} aria-label="选择素材：${escapeHtml(asset.name)}"></label><button class="asset-thumb ${asset.kind}" data-preview-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" aria-label="预览 ${escapeHtml(asset.name)}">${asset.kind === 'image' ? `<img loading="lazy" src="/api/assets/${encodeURIComponent(asset.id)}" alt="${escapeHtml(asset.name)}">` : asset.kind === 'video' ? `<video muted preload="metadata" src="/api/assets/${encodeURIComponent(asset.id)}"></video>` : '♫'}</button><div class="asset-details"><h3 title="${escapeHtml(asset.name)}">${escapeHtml(asset.name)}</h3><p>${{ image: '参考图片', video: '视频片段', audio: '声音素材' }[asset.kind]} · ${sizeLabel(asset.size)} · ${asset.source === 'model' ? '模型生成' : '本机上传'}</p>${asset.deletedAt ? `<p>删除于 ${escapeHtml(new Date(asset.deletedAt).toLocaleString('zh-CN'))}</p>` : ''}<div class="asset-actions"><a class="button" data-project-id="${escapeHtml(projectId)}" download href="/api/assets/${encodeURIComponent(asset.id)}?download">下载原文件 ↧</a>${asset.deletedAt ? `<button class="button" type="button" data-restore-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">恢复素材</button>` : `${asset.kind === 'image' ? `<button class="button" type="button" data-use-image-reference="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">以此图生成</button>` : ''}<button class="button" type="button" data-add-to-canvas="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">${['image', 'video'].includes(asset.kind) ? '作为参考放到画布' : '放到画布'}</button><button class="button delete-asset" type="button" data-delete-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" title="移到已删除素材，可恢复">删除素材</button>`}</div></div></article>`).join('')}</div></section>`).join('') : state.showDeletedAssets
+  $('#asset-list').innerHTML = assets.length ? groups.map(({ project, entries }) => `<section class="project-asset-group" data-project-id="${escapeHtml(project.id)}"><div class="project-group-heading"><h3 title="${escapeHtml(project.title || '未命名工程')}">${escapeHtml(project.title || '未命名工程')}</h3><span>${entries.length} 份素材</span></div><div class="asset-grid project-group-grid">${entries.map(({ asset, projectId }) => `<article class="asset-card${state.assetSelection.has(asset.id) ? ' selected' : ''}" data-asset-id="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"><label class="asset-select"><input type="checkbox" data-select-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"${state.assetSelection.has(asset.id) ? ' checked' : ''} aria-label="选择素材：${escapeHtml(asset.name)}"></label><button class="asset-thumb ${asset.kind}" data-preview-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" aria-label="预览 ${escapeHtml(asset.name)}">${asset.kind === 'image' ? `<img loading="lazy" src="${assetThumbnailUrl(asset.id)}" alt="${escapeHtml(asset.name)}">` : asset.kind === 'video' ? `<img loading="lazy" src="${assetThumbnailUrl(asset.id)}" alt="${escapeHtml(asset.name)}视频缩略图"><span class="result-play" aria-hidden="true">▶</span>` : '♫'}</button><div class="asset-details"><h3 title="${escapeHtml(asset.name)}">${escapeHtml(asset.name)}</h3><p>${{ image: '参考图片', video: '视频片段', audio: '声音素材' }[asset.kind]} · ${sizeLabel(asset.size)} · ${asset.source === 'model' ? '模型生成' : '本机上传'}</p>${asset.deletedAt ? `<p>删除于 ${escapeHtml(new Date(asset.deletedAt).toLocaleString('zh-CN'))}</p>` : ''}<div class="asset-actions"><a class="button" data-project-id="${escapeHtml(projectId)}" download href="/api/assets/${encodeURIComponent(asset.id)}?download">下载原文件 ↧</a>${asset.deletedAt ? `<button class="button" type="button" data-restore-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">恢复素材</button>` : `${asset.kind === 'image' ? `<button class="button" type="button" data-use-image-reference="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">以此图生成</button>` : ''}<button class="button" type="button" data-add-to-canvas="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">${['image', 'video'].includes(asset.kind) ? '作为参考放到画布' : '放到画布'}</button><button class="button delete-asset" type="button" data-delete-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" title="移到已删除素材，可恢复">删除素材</button>`}</div></div></article>`).join('')}</div></section>`).join('') : state.showDeletedAssets
     ? '<div class="empty-state" style="grid-column:1/-1"><strong>没有已删除的素材。</strong>删除的素材会出现在这里，可以随时恢复。</div>'
     : '<div class="empty-state" style="grid-column:1/-1"><strong>素材，都放在这里。</strong>上传 PNG、JPG、WebP 参考图，MP4 视频，或 MP3、WAV 音乐。</div>';
   for (const input of $$('#asset-list [data-select-asset]')) input.disabled = batchBusy;
@@ -1461,8 +1489,9 @@ function syncResultDetails() {
 function resultDetailsInfo(entry, job) {
   const { asset } = entry;
   const date = Number.isFinite(Date.parse(asset.createdAt)) ? new Date(asset.createdAt).toLocaleString('zh-CN', { hour12: false }) : '';
-  const metadata = [['工程', entry.projectTitle], ['类型', asset.kind === 'image' ? '图片' : '视频'], ['模型', job?.model || asset.model], ['生成时间', date], ['文件大小', Number.isFinite(asset.size) ? sizeLabel(asset.size) : '']].filter(([, value]) => value);
-  return `<dl class="result-details-meta">${metadata.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${job?.prompt ? `<details class="result-details-prompt"><summary>提示词</summary><p>${escapeHtml(job.prompt)}</p></details>` : ''}`;
+  const metadata = [['工程', entry.projectTitle], ['类型', { image: '图片', video: '视频', audio: '音频' }[asset.kind]], ['模型', job?.model || asset.model], ['生成时间', date], ['文件大小', Number.isFinite(asset.size) ? sizeLabel(asset.size) : ''], ['音色', asset.speech?.voiceId], ['时长', asset.kind === 'audio' && Number.isFinite(asset.duration) ? `${asset.duration.toFixed(2)} 秒` : '']].filter(([, value]) => value);
+  const prompt = job?.prompt || asset.speech?.text;
+  return `<dl class="result-details-meta">${metadata.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${prompt ? `<details class="result-details-prompt"><summary>${asset.kind === 'audio' ? '配音文案' : '提示词'}</summary><p>${escapeHtml(prompt)}</p></details>` : ''}`;
 }
 function showResultDetails(asset, projectId = '') {
   const entry = projectId
@@ -1471,7 +1500,7 @@ function showResultDetails(asset, projectId = '') {
   if (!entry) { toast('这个生成结果已移除，请在素材库中恢复后查看。', true); return; }
   asset = entry.asset; projectId = entry.projectId;
   const kind = asset.kind === 'image' ? '图片' : asset.kind === 'audio' ? '音频' : '视频';
-  const job = projectId === state.project?.id ? (asset.kind === 'image' ? state.imageJobs : state.jobs).find(item => item.assetId === asset.id) : null;
+  const job = projectId === state.project?.id && asset.kind !== 'audio' ? (asset.kind === 'image' ? state.imageJobs : state.jobs).find(item => item.assetId === asset.id) : null;
   const source = '/api/assets/' + encodeURIComponent(asset.id);
   const media = asset.kind === 'image'
     ? `<img src="${source}" alt="${escapeHtml(asset.name)}">`
@@ -1482,7 +1511,7 @@ function showResultDetails(asset, projectId = '') {
   $('#result-details-content').innerHTML = `<div class="result-details-preview">${media}</div><div class="result-details-info">${resultDetailsInfo(entry, job)}</div><div class="result-details-actions"><a class="button" data-project-id="${escapeHtml(projectId)}" href="${source}?download=1" download>下载${kind}</a><button class="button" type="button" data-add-to-canvas="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">放到画布</button><button class="button project-danger" type="button" data-delete-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}">删除</button></div>`;
   resultDetailsSelection = { projectId, assetId: asset.id };
   if (!$('#result-details-dialog').open) $('#result-details-dialog').showModal();
-  if (projectId !== state.project?.id) {
+  if (projectId !== state.project?.id && asset.kind !== 'audio') {
     const selection = resultDetailsSelection;
     const currentInfo = () => resultDetailsSelection === selection && $('#result-details-dialog').open && syncResultDetails()
       ? $('#result-details-content .result-details-info') : null;
@@ -1553,6 +1582,7 @@ function handleAssetClick(event) {
 }
 $('#asset-list').addEventListener('click', handleAssetClick);
 $('#result-list').addEventListener('click', handleAssetClick);
+$('#scene-list').addEventListener('click', handleAssetClick);
 $('#asset-list').addEventListener('change', handleSelectionChange);
 $('#result-list').addEventListener('change', handleSelectionChange);
 $('#result-details-content').addEventListener('click', event => {
@@ -1610,19 +1640,18 @@ function renderResults() {
   const groups = groupAssetEntries(entries);
   const resultCards = projectEntries => projectEntries.map(({ asset, projectId }) => {
     const source = '/api/assets/' + encodeURIComponent(asset.id);
-    const thumbnail = asset.kind === 'image' ? `<img loading="lazy" src="${source}" alt="${escapeHtml(asset.name)}">` : `<video muted playsinline preload="auto" src="${source}#t=0.1" aria-label="${escapeHtml(asset.name)}视频缩略图"></video><span class="result-play" aria-hidden="true">▶</span>`;
+    const thumbnail = ['image', 'video'].includes(asset.kind) ? `<img loading="lazy" src="${assetThumbnailUrl(asset.id)}" alt="${escapeHtml(asset.name)}缩略图">${asset.kind === 'video' ? '<span class="result-play" aria-hidden="true">▶</span>' : ''}` : '<span class="speech-result-art" aria-hidden="true">♫</span>';
     const selected = state.resultSelection.has(asset.id);
-    return `<article class="result-card${selected ? ' selected' : ''}" data-asset-id="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"><label class="result-select"><input type="checkbox" data-select-result="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"${selected ? ' checked' : ''} aria-label="选择结果：${escapeHtml(asset.name)}"></label><button class="result-preview ${asset.kind}" type="button" data-preview-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" aria-label="预览 ${escapeHtml(asset.name)}"><span class="result-thumbnail-placeholder" aria-hidden="true">${asset.kind === 'image' ? '图片' : '视频'}缩略图加载中</span>${thumbnail}<span class="result-kind">${asset.kind === 'image' ? '图片' : '视频'}</span></button><div class="result-body"><h3 class="result-title" title="${escapeHtml(asset.name)}">${escapeHtml(asset.name)}</h3><button class="button result-details-button" type="button" data-result-details="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" aria-label="查看 ${escapeHtml(asset.name)} 的详情">详情</button></div></article>`;
+    return `<article class="result-card${selected ? ' selected' : ''}" data-asset-id="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"><label class="result-select"><input type="checkbox" data-select-result="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}"${selected ? ' checked' : ''} aria-label="选择结果：${escapeHtml(asset.name)}"></label><button class="result-preview ${asset.kind}${asset.kind === 'audio' ? ' thumbnail-ready' : ''}" type="button" data-preview-asset="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" aria-label="预览 ${escapeHtml(asset.name)}"><span class="result-thumbnail-placeholder" aria-hidden="true">${asset.kind === 'image' ? '图片' : '视频'}缩略图加载中</span>${thumbnail}<span class="result-kind">${{ image: '图片', video: '视频', audio: '音频' }[asset.kind]}</span></button><div class="result-body"><h3 class="result-title" title="${escapeHtml(asset.name)}">${escapeHtml(asset.name)}</h3><button class="button result-details-button" type="button" data-result-details="${escapeHtml(asset.id)}" data-project-id="${escapeHtml(projectId)}" aria-label="查看 ${escapeHtml(asset.name)} 的详情">详情</button></div></article>`;
   }).join('');
-  $('#result-list').innerHTML = entries.length ? groups.map(({ project, entries: projectEntries }) => `<section class="project-result-group" data-project-id="${escapeHtml(project.id)}"><div class="project-group-heading"><h3 title="${escapeHtml(project.title || '未命名工程')}">${escapeHtml(project.title || '未命名工程')}</h3><span>${projectEntries.length} 个结果</span></div><div class="generation-results project-group-grid">${resultCards(projectEntries)}</div></section>`).join('') : '<div class="empty-state" style="grid-column:1/-1"><strong>还没有' + (filter === 'image' ? '图片' : filter === 'video' ? '视频' : '生成') + '结果。</strong>已保存成功的图片和视频会显示在这里，可预览、下载或放到画布继续创作。生成中的任务请在对应生成页查看。</div>';
+  $('#result-list').innerHTML = entries.length ? groups.map(({ project, entries: projectEntries }) => `<section class="project-result-group" data-project-id="${escapeHtml(project.id)}"><div class="project-group-heading"><h3 title="${escapeHtml(project.title || '未命名工程')}">${escapeHtml(project.title || '未命名工程')}</h3><span>${projectEntries.length} 个结果</span></div><div class="generation-results project-group-grid">${resultCards(projectEntries)}</div></section>`).join('') : '<div class="empty-state" style="grid-column:1/-1"><strong>还没有' + (filter === 'image' ? '图片' : filter === 'video' ? '视频' : filter === 'audio' ? '音频' : '生成') + '结果。</strong>已保存成功的图片、视频和配音会显示在这里，可预览、下载或放到画布继续创作。生成中的任务请在对应生成页查看。</div>';
   for (const input of $$('#result-list [data-select-result]')) input.disabled = batchBusy;
-  for (const media of $$('#result-list .result-preview img, #result-list .result-preview video')) {
+  for (const media of $$('#result-list .result-preview img')) {
     const preview = media.closest('.result-preview');
     const ready = () => preview.classList.add('thumbnail-ready');
     const failed = () => { preview.classList.add('thumbnail-error'); const placeholder = preview.querySelector('.result-thumbnail-placeholder'); if (placeholder) placeholder.textContent = '缩略图暂不可用 · 点击预览'; };
     media.addEventListener('error', failed, {once:true});
-    if (media.tagName === 'IMG') { media.addEventListener('load', ready, {once:true}); if (media.complete && media.naturalWidth) ready(); }
-    else { media.addEventListener('loadeddata', ready, {once:true}); if (media.readyState >= 2) ready(); }
+    media.addEventListener('load', ready, {once:true}); if (media.complete && media.naturalWidth) ready();
   }
 }
 
@@ -1692,15 +1721,8 @@ function renderSettings() {
 function renderVideoCatalogStatus() {
   const synced = state.catalogSyncedAt ? `最近同步：${new Date(state.catalogSyncedAt).toLocaleTimeString('zh-CN')}。` : '';
   const message = state.catalogError || `已读取 ${state.catalog.length} 个视频模型。${synced}${state.catalogWarning || ''}`;
-  let centerNote = $('#center-video-catalog-note');
-  if (!centerNote && $('#center-list-view .center-toolbar')) {
-    centerNote = document.createElement('p'); centerNote.id = 'center-video-catalog-note';
-    centerNote.className = 'honest-note video-catalog-status'; centerNote.setAttribute('role', 'status');
-    $('#center-list-view .center-toolbar').after(centerNote);
-  }
-  for (const note of [$('#model-catalog-note'), centerNote].filter(Boolean)) {
-    note.textContent = message; note.classList.toggle('error', Boolean(state.catalogError));
-  }
+  const note = $('#model-catalog-note');
+  if (note) { note.textContent = message; note.classList.toggle('error', Boolean(state.catalogError)); }
 }
 function applyPendingVideoCatalog() {
   if (!state.pendingCatalog || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)
@@ -1800,7 +1822,7 @@ function textContextText() {
   return lines.join('\n');
 }
 function textContextPrompt() {
-  return `请基于下面这份镜策工程需求，帮助我继续创作。请先指出需求中最需要补充的信息，再给出可以直接执行的建议。\n\n${textContextText()}`;
+  return `请基于下面这份幻帧 MiraFrame工程需求，帮助我继续创作。请先指出需求中最需要补充的信息，再给出可以直接执行的建议。\n\n${textContextText()}`;
 }
 function renderTextChat() {
   const messages = $('#text-chat-messages');
@@ -1845,7 +1867,8 @@ function chatImageMarkup(message) {
     if (!/^[a-f0-9-]{36}$/.test(image.requestId) || !Number.isSafeInteger(image.index) || image.index < 0) return '';
     const source = `/api/text-images/${image.requestId}/${image.index}`;
     const asset = state.project?.assets.find(asset => !asset.deletedAt && asset.chatImageId === `${image.requestId}-${image.index}`);
-    return `<figure class="chat-image-figure" data-chat-request="${image.requestId}" data-chat-index="${image.index}" data-chat-project="${escapeHtml(state.project?.id || '')}"><div class="chat-image-preview"><img loading="lazy" draggable="true" src="${asset ? '/api/assets/' + encodeURIComponent(asset.id) : source}" alt="${escapeHtml(image.name || '对话图片')}"><div class="chat-image-error" hidden><button type="button" class="chat-image-retry" data-chat-image-action="retry">${uiIcon('RefreshCw')}重新加载图片</button></div></div><figcaption>${escapeHtml(image.name || '对话图片')}</figcaption><div class="chat-image-actions"><button type="button" data-chat-image-action="save"${asset ? ' disabled' : ''}>${uiIcon('FolderPlus')}${asset ? '已加入素材库' : '加入素材库'}</button><button type="button" data-chat-image-action="place">${uiIcon('MoveUpRight')}放到画布</button><a href="${source}?download=1" download>${uiIcon('Download')}下载</a></div></figure>`;
+    const thumbnail = asset ? assetThumbnailUrl(asset.id) : thumbnailUrl(source);
+    return `<figure class="chat-image-figure" data-chat-request="${image.requestId}" data-chat-index="${image.index}" data-chat-project="${escapeHtml(state.project?.id || '')}"><div class="chat-image-preview"><button type="button" class="chat-image-open" data-chat-image-action="preview" aria-label="放大查看${escapeHtml(image.name || '对话图片')}"><img loading="lazy" draggable="true" src="${thumbnail}" alt="${escapeHtml(image.name || '对话图片')}"></button><div class="chat-image-error" hidden><button type="button" class="chat-image-retry" data-chat-image-action="retry">${uiIcon('RefreshCw')}重新加载图片</button></div></div><figcaption>${escapeHtml(image.name || '对话图片')}</figcaption><div class="chat-image-actions"><button type="button" data-chat-image-action="save"${asset ? ' disabled' : ''}>${uiIcon('FolderPlus')}${asset ? '已加入素材库' : '加入素材库'}</button><button type="button" data-chat-image-action="place">${uiIcon('MoveUpRight')}放到画布</button><a href="${source}?download=1" download>${uiIcon('Download')}下载</a></div></figure>`;
   }).join('')}</div>`;
 }
 const chatImageImports = new Map();
@@ -1889,8 +1912,15 @@ document.addEventListener('dragstart', event => {
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-chat-image-action]'), payload = chatImagePayload(event.target);
   if (!button || !payload) return;
+  if (button.dataset.chatImageAction === 'preview') {
+    const asset = state.project?.assets.find(item => !item.deletedAt && item.chatImageId === `${payload.requestId}-${payload.index}`);
+    const source = asset ? `/api/assets/${encodeURIComponent(asset.id)}` : `/api/text-images/${payload.requestId}/${payload.index}`;
+    $('#preview-title').textContent = asset?.name || '对话图片';
+    const media = document.createElement('img'); media.src = source; media.alt = asset?.name || '对话图片';
+    $('#preview-content').replaceChildren(media); $('#preview-dialog').showModal(); return;
+  }
   if (button.dataset.chatImageAction === 'retry') {
-    const img = button.closest('.chat-image-preview').querySelector('img'); img.src = `/api/text-images/${payload.requestId}/${payload.index}?reload=${Date.now()}`; return;
+    const img = button.closest('.chat-image-preview').querySelector('img'); img.src = `${thumbnailUrl(`/api/text-images/${payload.requestId}/${payload.index}`)}&reload=${Date.now()}`; return;
   }
   action(button, () => importChatImage(payload, null, button.dataset.chatImageAction === 'place'));
 });
@@ -2291,7 +2321,8 @@ async function poll() {
   try {
     if (!state.dirty.size && !state.saveTask) await refreshProjectList();
     if (!state.project) { if (state.projects.length) await selectAvailableProject(); return; }
-    await refreshJobs(); await refreshImageJobs();
+    await refreshJobs(); await refreshImageJobs(); await speech.refresh();
+    if (state.view === 'previs' || previsWorkflow.hasActive()) await previsWorkflow.refresh();
     if (state.dirty.size || state.saveTask || state.switching || state.submitting.size || canvas.busy()) return;
     const editing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
     if (editing || sceneVideoPlaying()) return;
@@ -2337,27 +2368,27 @@ function resetCenterModels() {
 }
 function centerOptions(selected = []) {
   const kind = centerForm.elements.kind.value;
-  const urls = kind === 'video' ? ['https://sub.beibeihai.xyz', 'https://direct.beibeihai.xyz'] : [kind === 'image' ? 'https://sub.beibeihai.xyz' : 'https://sub.beibeihai.xyz/v1'];
+  const urls = kind === 'video' ? ['https://sub.beibeihai.xyz', 'https://direct.beibeihai.xyz'] : kind === 'speech' ? ['https://api.minimax.cn', 'https://api.minimax.io'] : [kind === 'image' ? 'https://sub.beibeihai.xyz' : 'https://sub.beibeihai.xyz/v1'];
   const baseUrl = centerForm.elements.baseUrl.value;
   centerForm.elements.baseUrl.innerHTML = urls.map(url => '<option>' + escapeHtml(url) + '</option>').join('');
   if (urls.includes(baseUrl)) centerForm.elements.baseUrl.value = baseUrl;
-  const catalog = kind === 'image' ? state.imageCatalog : kind === 'text' ? state.textCatalog : state.catalog;
+  const catalog = kind === 'image' ? state.imageCatalog : kind === 'text' ? state.textCatalog : kind === 'speech' ? (state.speechCatalog || []).map(name => ({ name })) : state.catalog;
   const names = [...new Set([...(centerTokenModels || catalog || []).map(model => model.name), ...selected])];
   centerForm.elements.models.innerHTML = names.map(name => '<option value="' + escapeHtml(name) + '"' + (selected.includes(name) ? ' selected' : '') + '>' + escapeHtml(name) + '</option>').join('');
   renderCenterModelChoices();
 }
 function resetCenterEditor() { resetCenterModels(); centerForm.reset(); centerForm.elements.id.value = ''; $('#connection-editor-title').textContent = '添加接口'; $('#center-model-search').value = ''; centerOptions(); centerForm.hidden = true; $('#center-list-view').hidden = false; }
 function renderConnectionConsumers() {
-  renderSettingsStatus(); renderVideoCatalogStatus(); renderTextChat(); renderImageGeneration(); renderScenes(); canvas.render();
+  renderSettingsStatus(); renderVideoCatalogStatus(); renderTextChat(); renderImageGeneration(); renderScenes(); speech.render(); canvas.render();
 }
 async function refreshCenter() {
   [centerConnections, centerExistingConnections] = await Promise.all([api('/api/connections'), api('/api/existing-connections')]);
   renderVideoCatalogStatus();
-  const kindLabel = { image: '图片', video: '视频', text: '语言模型' };
+  const kindLabel = { image: '图片', video: '视频', text: '语言模型', speech: '语音模型' };
   const row = (name, kind, url, models, status, buttons) => '<tr><td><strong>' + escapeHtml(name) + '</strong></td><td>' + escapeHtml(kindLabel[kind]) + '</td><td class="interface-url">' + escapeHtml(url) + '</td><td>' + escapeHtml(models.join('、') || '按生成项选择') + '</td><td data-connection-status>' + escapeHtml(status) + '</td><td><div class="interface-row-actions">' + buttons + '</div></td></tr>';
   const saved = centerConnections.map(item => row(item.name, item.kind, item.baseUrl, item.models, centerVerification.get(item.id) || '令牌已保存 · 待验证', '<button type="button" class="button" data-edit-connection="' + escapeHtml(item.id) + '">详细</button><button type="button" class="button center-remove" data-remove-connection="' + escapeHtml(item.id) + '">删除</button><details class="interface-actions"><summary>更多</summary><button type="button" class="button" data-check-connection="' + escapeHtml(item.id) + '">验证令牌</button></details>')).join('');
   const existing = centerExistingConnections.map(item => row(item.name, item.kind, item.baseUrl, item.models, '令牌已保存', '<button type="button" class="button" data-legacy="' + item.kind + '">详细</button><button type="button" class="button center-remove" data-remove-existing-connection="' + item.kind + '">删除</button>')).join('');
-  $('#connections-list').innerHTML = saved || existing ? '<div class="interface-table-wrap"><table class="interface-table"><thead><tr><th>接口名称</th><th>类型</th><th>平台地址</th><th>模型</th><th>状态</th><th>操作</th></tr></thead><tbody>' + saved + existing + '</tbody></table></div>' : '<div class="center-empty"><h3>连接你的第一个模型接口</h3><p>添加图片、视频或语言模型接口，读取令牌的模型后勾选绑定。</p><button type="button" class="primary" id="center-empty-add">＋ 添加接口</button></div>';
+  $('#connections-list').innerHTML = saved || existing ? '<div class="interface-table-wrap"><table class="interface-table"><thead><tr><th>接口名称</th><th>类型</th><th>平台地址</th><th>模型</th><th>状态</th><th>操作</th></tr></thead><tbody>' + saved + existing + '</tbody></table></div>' : '<div class="center-empty"><h3>连接你的第一个模型接口</h3><p>添加图片、视频、语言或语音模型接口，读取模型后勾选绑定。</p><button type="button" class="primary" id="center-empty-add">＋ 添加接口</button></div>';
   if ($('#center-empty-add')) $('#center-empty-add').onclick = openCenterEditor;
 
 }
@@ -2427,7 +2458,7 @@ $('#confirm-delete-connection').onclick = () => action($('#confirm-delete-connec
     $('#delete-connection-dialog').close();
     Object.assign(state, await api('/api/bootstrap'));
     await refreshCenter(); resetCenterEditor();
-    renderSettingsStatus(); renderVideoCatalogStatus(); renderTextChat(); renderImageGeneration(); renderScenes(); canvas.render();
+    renderConnectionConsumers();
     $('#connections-center-message').textContent = '已删除“' + item.name + '”。';
   } finally {
     state.catalogChanging = false;
@@ -2440,6 +2471,13 @@ function selectCenterTab(tab) {
   if (tab === 'storage') { renderStorageSettings(); const form = $('#storage-form'); $('#center-storage-panel').append(form); $('#close-storage').hidden = true; }
 }
 function openCenterEditor() { resetCenterEditor(); centerForm.hidden = false; $('#center-list-view').hidden = true; centerForm.elements.name.focus(); }
+async function openSpeechConnections() {
+  await refreshCenter();
+  resetCenterEditor();
+  selectCenterTab('api');
+  $('#connections-center-message').textContent = '';
+  $('#connections-center').showModal();
+}
 async function loadCenterTokenModels() {
   if (centerModelsBusy) return;
   const f = centerForm.elements;
@@ -2456,7 +2494,7 @@ async function loadCenterTokenModels() {
     if (!current()) return;
     const selected = [...f.models.selectedOptions].map(option => option.value);
     centerTokenModels = result.catalog; centerOptions(selected);
-    centerEditorMessage('此令牌返回 ' + result.catalog.length + ' 个模型。' + (result.catalogWarning || '')
+    centerEditorMessage((result.catalogSource === 'official-docs' ? '音色读取验证通过。官方文档列出 ' : '此令牌返回 ') + result.catalog.length + ' 个模型。' + (result.catalogWarning || '')
       + (result.catalog.length ? '勾选需要的模型后保存接口。' : '平台未返回可绑定模型，请核对令牌权限或补充完整模型名称。'));
   } catch (error) {
     if (!current()) return;

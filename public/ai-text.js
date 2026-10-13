@@ -43,7 +43,7 @@ export function buildAiMessages({ mode, instruction = '', inputs = [] }) {
   const source = inputs.filter(item => item && typeof item.text === 'string' && item.text.trim())
     .map(item => `【${clean(item.label, 120) || '输入'}】\n${clean(item.text)}`).join('\n\n');
   const system = [
-    '你是镜策视频创作工作台中的中文创作助手。',
+    '你是幻帧 MiraFrame视频创作工作台中的中文创作助手。',
     '请只依据用户提供的内容创作，不要编造没有依据的品牌事实、人物身份或产品参数。',
     '输出要具体、可编辑、可直接交给图片或视频生成模型使用。',
     mode === 'storyboard'

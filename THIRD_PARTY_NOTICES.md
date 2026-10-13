@@ -110,3 +110,8 @@ freely, subject to the following restrictions:
 2. Altered source versions must be plainly marked as such, and must not be
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
+# Blender 预演工具
+
+Blender 由用户自行安装，本项目不随源码包分发 Blender。Blender 使用 GNU GPL，官方入口 https://www.blender.org/ 。本项目新增的场景生成器为独立代码。
+
+本机助手首次启动从 PyPI 下载 imageio-ffmpeg 0.6.0 的 Windows x64 wheel，按 PyPI SHA256 校验后提取 FFmpeg；该运行包不进入源码分发。imageio-ffmpeg 使用 BSD-2-Clause，项目 https://github.com/imageio/imageio-ffmpeg ，wheel 保留在本机 bin/video-package 下的授权文件。FFmpeg 的具体许可由下载构建的启用功能决定，含 libx264 的构建适用 GPL；执行文件的许可和构建配置可通过 `ffmpeg -L`、`ffmpeg -buildconf` 检查，来源 https://ffmpeg.org/legal.html 。重新分发运行时请随包提供相应许可及来源要求；默认助手包仅分发源文件与安装脚本。

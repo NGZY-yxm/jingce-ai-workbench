@@ -160,7 +160,7 @@ function canvasHarness(t, project = { id:'project-test', graph:graph(), scenes:[
   element('#canvas-assets-panel').hidden = true;
   Object.assign(element('#canvas-overview'),{clientWidth:0,clientHeight:0});
   const state = { project, kinds, view:'canvas', jobs:[], submitting:new Set(), settings:{hasKey:false} };
-  const marked = [], messages = [], generated = [], selectedImages = [], docked = [];
+  const marked = [], messages = [], generated = [], submittedSpeech = [], selectedImages = [], docked = [];
   const canvas = createInfiniteCanvas({ getState:()=>state, mark:field=>marked.push(field), toast:message=>messages.push(message),
     referencesFor:()=>[], parameters:scene=>state.catalog?.length
       ? videoParameters(state.catalog.find(model=>model.name === (scene.videoModel || state.settings.videoModel)) || state.catalog[0],scene)
@@ -168,7 +168,8 @@ function canvasHarness(t, project = { id:'project-test', graph:graph(), scenes:[
     createScene:(prompt,title)=> { const scene={id:randomUUID(),title,videoPrompt:prompt,duration:5,videoAssetId:'',references:[],generationDuration:5,generationCount:1}; project.scenes.push(scene); marked.push('scenes'); return scene; },
     flush:async()=>{}, setView:()=>{}, generateScene:async sceneId=>{ generated.push(sceneId); }, selectAsset:async()=>{},
     selectImageCandidate:async (nodeId,assetId)=>{ selectedImages.push([nodeId,assetId]); const node=project.graph.nodes.find(item=>item.id===nodeId); node.selectedAssetId=assetId; node.assetId=assetId; },
-    uploadFiles:async()=>[], previewAsset:()=>{}, setTextChatDocked:value=>docked.push(value) });
+    uploadFiles:async()=>[], previewAsset:()=>{}, setTextChatDocked:value=>docked.push(value),
+    submitSpeechCard:async (nodeId, value)=>submittedSpeech.push({nodeId,value}), refreshSpeechJobs:async()=>{}, speechPendingForNode:()=>false });
   canvas.render();
   const keyboard = async (key, overrides = {}) => {
     const event = { key, ctrlKey:true, metaKey:false, shiftKey:false, target:element('#canvas-viewport'), defaultPrevented:false,
@@ -188,8 +189,28 @@ function canvasHarness(t, project = { id:'project-test', graph:graph(), scenes:[
     for (const current of path) { event.currentTarget = current; await current.fire(type,event); if (event.propagationStopped) break; }
     event.currentTarget = null; return event;
   };
-  return { canvas,state,project,element,marked,messages,generated,selectedImages,docked,keyboard,cardFor,cardAction,dispatch, document:documentElement, makeElement:tagName=>new Element(tagName) };
+  return { canvas,state,project,element,marked,messages,generated,submittedSpeech,selectedImages,docked,keyboard,cardFor,cardAction,dispatch, document:documentElement, makeElement:tagName=>new Element(tagName) };
 }
+
+test('语音生成卡留在画布编辑，提交前保留文案和参数，顶部横栏不再出现', async t => {
+  const source = node('narration', 'text', { note: '雨夜开场旁白。' });
+  const h = canvasHarness(t, { id: 'speech-canvas', scenes: [], assets: [], graph: graph([source]) });
+  h.state.speechCatalog = ['speech-2.8-hd'];
+  h.state.speechConnections = [{ models: ['speech-2.8-hd'], hasKey: true, baseUrl: 'https://api.minimax.cn' }];
+  const created = h.canvas.addSpeech(null, source);
+  assert.equal(created.kind, 'audio'); assert.equal(created.role, 'speech-generation');
+  assert.equal(created.speechConfig.text, source.note);
+  assert.equal(h.cardFor(created.id).classList.contains('details-open'), true);
+  assert.match(h.cardFor(created.id).innerHTML, /data-speech-field="text"/);
+  assert.doesNotMatch(h.cardFor(created.id).innerHTML, /canvas-node-header/);
+  assert.equal(h.project.graph.links.at(-1).to, created.id);
+  assert.deepEqual(validateGraph(h.project.graph).nodes.find(item => item.id === created.id).speechConfig, created.speechConfig);
+  await h.cardAction(created.id, 'speech-generate');
+  assert.equal(h.submittedSpeech.length, 1);
+  assert.equal(h.submittedSpeech[0].nodeId, created.id);
+  assert.equal(h.submittedSpeech[0].value.text, source.note);
+  assert.deepEqual(h.generated, []);
+});
 
 test('批量放置用真实画布保存独立素材卡，自动避让且保留未补选的占位卡和撤销记录', async t => {
   const placeholder = node('batch-placeholder', 'image', { label: '待补构图', assetName: '构图.png' });
@@ -354,8 +375,7 @@ test('全屏侧栏拖动与键盘调宽记忆宽度并限制范围，取消拖�
   const h=canvasHarness(t), saved=new Map();
   window.innerWidth=1440;h.element('#creative-canvas').clientWidth=1410;
   window.localStorage={getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)};
-  h.canvas.setExpanded(true);assert.equal(h.docked.at(-1),false);
-  h.element('#toggle-canvas-text').onclick();assert.equal(h.docked.at(-1),true);
+  h.canvas.setExpanded(true);assert.equal(h.docked.at(-1),true);
   const handle=h.element('#canvas-text-resizer'),width=()=>Number(handle.getAttribute('aria-valuenow'));
   const initial=width();assert.equal(initial,450);
   await h.dispatch(handle,'pointerdown',{button:0,pointerId:77,clientX:960});
@@ -565,11 +585,11 @@ function coverFixture() {
 // Media methods and DOM attachments simulate local browser primitives; canvas
 // event handling, graph mutations, history and playback flags use the real module.
 function attachCoverMedia(h, card = h.cardFor('cover-shot')) {
-  const header = h.makeElement('header'); header.className = 'canvas-node-header';
+  const header = h.makeElement('div'); header.className = 'canvas-detail-heading';
   const button = h.makeElement('button'); button.dataset.cardAction = 'play-cover'; header.append(button);
   const cover = h.makeElement('div'); cover.className = 'canvas-cover';
-  const video = h.makeElement('video'); video.dataset.coverVideo = '';
-  Object.assign(video,{src:'/api/assets/local-cover-video',paused:true,ended:false,controls:false,readyState:1,duration:5,currentTime:0,playCount:0,pauseCount:0});
+  const video = h.makeElement('video'); video.dataset.coverVideo = ''; video.dataset.mediaSrc = '/api/assets/local-cover-video';
+  Object.assign(video,{src:'',poster:'/api/assets/local-cover-video?thumbnail=1',paused:true,ended:false,controls:false,readyState:1,duration:5,currentTime:0,playCount:0,pauseCount:0});
   video.play = async () => { video.playCount++; video.paused = false; video.ended = false; };
   video.pause = () => { video.pauseCount++; video.paused = true; };
   const drag = h.makeElement('div'); drag.dataset.coverDrag = ''; cover.append(video); cover.append(drag);
@@ -679,12 +699,15 @@ test('按钮与原生视频的空格保留默认行为，空白画布的空格�
 
 test('封面播放按钮只播放和暂停既有本地视频，不申请生成或修改选片', async t => {
   const h = canvasHarness(t,coverFixture()), {card,button,video} = attachCoverMedia(h);
+  assert.equal(video.src,'','未点击播放前不应加载本地原视频');
+  assert.equal(video.poster,'/api/assets/local-cover-video?thumbnail=1');
   h.marked.length = 0; // The initial layout migration is complete before playback.
   h.state.settings.hasKey = true;
   h.state.jobs.push({id:'existing-cover-job',sceneId:'cover-scene',state:'done',assetId:'local-cover-video'});
   const project = structuredClone(h.project), jobs = structuredClone(h.state.jobs);
   await h.cardAction('cover-shot','play-cover');
   assert.equal(video.playCount,1); assert.equal(video.pauseCount,0); assert.equal(video.paused,false); assert.equal(video.controls,true);
+  assert.equal(video.src,'/api/assets/local-cover-video','点击播放后才设置本地原视频地址');
   assert.equal(card.classList.contains('is-playing'),true); assert.equal(card.classList.contains('media-active'),true); assert.equal(button.textContent,'暂停');
   await h.cardAction('cover-shot','play-cover');
   assert.equal(video.playCount,1); assert.equal(video.pauseCount,1); assert.equal(video.paused,true);
@@ -783,24 +806,18 @@ test('普通媒体封面的滚轮仍以指针为中心缩放画布', async t => 
   assert.deepEqual(h.generated,[]);
 });
 
-test('详情浮层定位临时放大再收缩时恢复被浏览器布局夹紧的滚动位置', t => {
+test('详情改到卡片下方后仍保留可滚动内容的位置', t => {
   const h = canvasHarness(t,coverFixture()), card = h.cardFor('cover-shot');
   const fixture = coverDetailsFixture(h,{detailsScrollHeight:560}); card.append(fixture.panel);
   const viewport = h.element('#canvas-viewport'); viewport.clientWidth = 620; viewport.clientHeight = 700;
   card.getBoundingClientRect = () => ({left:40,top:95,right:400,bottom:250,width:360,height:155});
   fixture.details.scrollTop = 170; card.hovered = true;
-  let layoutClamps = 0;
   card.onStyleChange = (name,value) => {
     if (name !== '--details-max-height') return;
-    // Layout clamps scrollTop to the available range when clientHeight changes.
-    const before = fixture.details.scrollTop;
     fixture.details.clientHeight = Number.parseFloat(value);
-    fixture.details.scrollTop = Math.min(before,Math.max(0,fixture.details.scrollHeight-fixture.details.clientHeight));
-    if (fixture.details.scrollTop < before) layoutClamps++;
   };
   const before = structuredClone(h.project.graph.viewport);
   h.canvas.render();
-  assert.ok(layoutClamps > 0,'此布局必须实际触发浏览器的滚动范围夹紧');
   assert.ok(fixture.details.clientHeight < fixture.details.scrollHeight);
   assert.equal(card.querySelector('.canvas-details-content'),fixture.details);
   assert.equal(fixture.details.scrollTop,170,'定位后的最终可滚区域应恢复原位置');
@@ -824,10 +841,10 @@ function coverDetailsGeometry(h, { coverRect, viewportRect, overviewRect = null,
   const fixture = coverDetailsFixture(h,{detailsHeight:contentHeight,detailsScrollHeight:contentHeight});
   card.append(fixture.panel);
   card.onStyleChange = (name,value) => {
-    if (name === '--details-max-height') fixture.details.clientHeight = Math.min(contentHeight,Number.parseFloat(value));
+    if (name === '--details-max-height') fixture.details.clientHeight = Math.min(contentHeight,Math.max(0,Number.parseFloat(value)-47));
     if (name === '--details-width') fixture.details.clientWidth = Number.parseFloat(value);
   };
-  Object.defineProperty(fixture.panel,'offsetHeight',{get:()=>fixture.details.clientHeight});
+  Object.defineProperty(fixture.panel,'offsetHeight',{get:()=>fixture.details.clientHeight+47});
   Object.defineProperty(fixture.panel,'offsetWidth',{get:()=>fixture.details.clientWidth});
   fixture.panel.getBoundingClientRect = () => {
     const current = card.getBoundingClientRect();
@@ -845,58 +862,60 @@ function coverDetailsGeometry(h, { coverRect, viewportRect, overviewRect = null,
   return {...media,...fixture,header,viewport};
 }
 
-test('详情贴着卡片显示，并在卡片移动和画布缩放后保持相邻', async t => {
+test('点击后详情优先显示在卡片下方，底部空间不足时转到上方', async t => {
   const h = canvasHarness(t,coverFixture());
   const viewportRect = canvasDOMRect(0,0,850,720), coverRect = canvasDOMRect(250,120,200,260);
   const fixture = coverDetailsGeometry(h,{coverRect,viewportRect,contentHeight:260});
-  await h.element('#nodes').fire('pointerover',{target:fixture.drag,relatedTarget:null,clientX:320,clientY:180});
+  await h.dispatch(fixture.drag,'click',{button:0});
   const first = fixture.panel.getBoundingClientRect();
-  assert.equal(Math.round(first.left - coverRect.right),12,'详情优先贴在卡片右侧');
-  assert.equal(Math.round(first.top),120,'详情顶部与卡片顶部对齐');
-  assert.equal(Math.round(first.width),360);
-  assert.equal(fixture.card.classList.contains('details-left'),false);
+  assert.equal(Math.round(first.left),70,'宽版详情与卡片中心对齐');
+  assert.equal(Math.round(first.top - coverRect.bottom),14,'详情优先显示在卡片下方');
+  assert.equal(Math.round(first.width),560);
+  assert.equal(fixture.card.classList.contains('details-below'),true);
   fixture.card.getBoundingClientRect = () => canvasDOMRect(620,450,136,204);
   h.project.graph.viewport.zoom = .34;
   h.canvas.render();
   const second = fixture.panel.getBoundingClientRect();
-  assert.equal(Math.round(fixture.card.getBoundingClientRect().left - second.right),12,'右侧空间不足时详情贴在卡片左侧');
-  assert.equal(Math.round(second.top),316,'卡片靠近底部时详情向上夹紧');
-  assert.equal(Math.round(second.width),360);
-  assert.equal(fixture.card.classList.contains('details-left'),true);
+  assert.equal(Math.round(second.left),276,'详情仍在画布右边界内');
+  assert.equal(Math.round(fixture.card.getBoundingClientRect().top - second.bottom),14,'底部空间不足时详情贴在卡片上方');
+  assert.equal(Math.round(second.width),560);
+  assert.equal(fixture.card.classList.contains('details-above'),true);
 });
 
-test('总览面板存在时，详情仍贴着卡片；两侧都不足时收缩到可用空间', async t => {
+test('总览面板存在时，宽版详情保持在可见画布内', async t => {
   const project = coverFixture(); project.graph.viewport.zoom = .34;
   const h = canvasHarness(t,project);
   const viewportRect = canvasDOMRect(0,0,850,720), coverRect = canvasDOMRect(370,180,136,204), overviewRect = canvasDOMRect(664,82,170,110);
   const fixture = coverDetailsGeometry(h,{coverRect,viewportRect,overviewRect,contentHeight:340});
-  await h.element('#nodes').fire('pointerover',{target:fixture.drag,relatedTarget:null,clientX:438,clientY:220});
+  await h.dispatch(fixture.drag,'click',{button:0});
   const first = fixture.panel.getBoundingClientRect();
-  assert.equal(Math.round(coverRect.left - first.right),12,'总览不应把详情推到远处');
-  assert.equal(Math.round(first.top),180,'详情仍与卡片顶部对齐');
-  assert.equal(Math.round(first.width),346,'两侧不足时面板宽度收缩到左侧可用空间');
-  assert.equal(fixture.card.classList.contains('details-left'),true);
+  assert.equal(Math.round(first.left),158);
+  assert.equal(Math.round(first.top - coverRect.bottom),14);
+  assert.equal(Math.round(first.width),560);
+  assert.equal(fixture.card.classList.contains('details-below'),true);
   fixture.card.getBoundingClientRect = () => canvasDOMRect(20,20,360,180);
   h.canvas.render();
   const second = fixture.panel.getBoundingClientRect();
   const movedCard = fixture.card.getBoundingClientRect();
-  assert.equal(Math.round(second.left - movedCard.right),12,'卡片移动后详情仍贴在右侧');
-  assert.equal(Math.round(second.top),20);
-  assert.equal(Math.round(second.width),360);
-  assert.equal(fixture.card.classList.contains('details-left'),false);
+  assert.equal(Math.round(second.left),14,'卡片靠近左边界时详情留在可见画布内');
+  assert.equal(Math.round(second.top - movedCard.bottom),14);
+  assert.equal(Math.round(second.width),560);
+  assert.equal(fixture.card.classList.contains('details-below'),true);
 });
 
-test('鼠标离开卡片前往相邻详情时，详情保持打开并允许交互', async t => {
+test('卡片详情只在点击后打开，悬停离开不会关闭，点击与 Esc 可以收起', async t => {
   const h = canvasHarness(t,coverFixture());
   const fixture = coverDetailsGeometry(h,{coverRect:canvasDOMRect(80,280,360,220),viewportRect:canvasDOMRect(0,0,620,700),contentHeight:700});
   await h.element('#nodes').fire('pointerover',{target:fixture.drag,relatedTarget:null,clientX:120,clientY:300});
+  assert.equal(fixture.card.classList.contains('details-open'),false,'悬停不能打开详情');
+  await h.dispatch(fixture.drag,'click',{button:0});
+  assert.equal(fixture.card.classList.contains('details-open'),true);
   await h.element('#nodes').fire('pointerout',{target:fixture.drag,relatedTarget:null,clientX:120,clientY:300});
-  assert.equal(fixture.card.classList.contains('details-open'),true,'跨越卡片与详情之间的空白时不能立即关闭');
-  await h.element('#nodes').fire('pointerover',{target:fixture.panel,relatedTarget:null,clientX:500,clientY:220});
-  await new Promise(resolve => setTimeout(resolve,560));
-  assert.equal(fixture.card.classList.contains('details-open'),true,'进入详情面板后应取消隐藏计时器');
-  await h.element('#nodes').fire('pointerout',{target:fixture.panel,relatedTarget:null,clientX:500,clientY:220});
-  await new Promise(resolve => setTimeout(resolve,560));
+  assert.equal(fixture.card.classList.contains('details-open'),true,'鼠标离开卡片仍保持详情');
+  await h.dispatch(fixture.drag,'click',{button:0});
+  assert.equal(fixture.card.classList.contains('details-open'),false);
+  await h.dispatch(fixture.drag,'click',{button:0});
+  await h.keyboard('Escape',{ctrlKey:false});
   assert.equal(fixture.card.classList.contains('details-open'),false);
 });
 

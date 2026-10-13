@@ -11,6 +11,7 @@ import { referenceRequestIssue, referenceCapabilityText, referenceConstraintIssu
 import { updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions } from '../public/prompt-mentions.js';
 import { createReferencePromptEditor } from '../public/prompt-editor.js';
 import { createSkillLibrary } from '../public/skills.js';
+import { createPrevisWorkflow } from '../public/previs.js';
 
 const catalog = [{ name: 'model-a', defaultDuration: 5, defaultResolution: '720p',
   tiers: [5, 15].map(duration => ({ duration, resolution: '720p', price: duration / 5 })) }];
@@ -33,7 +34,7 @@ async function page(fetcher, storage = new Map()) {
     videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote,
     resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities,
     updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions, createReferencePromptEditor,
-    createSkillLibrary, createInfiniteCanvas: () => ({ render() {}, fit() {}, activate() {}, reset() {}, busy: () => false }), fetch: fetcher,
+    createSkillLibrary, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }), createInfiniteCanvas: () => ({ render() {}, fit() {}, activate() {}, reset() {}, busy: () => false }), fetch: fetcher,
   });
   const script = (await readFile(new URL('../public/app.js', import.meta.url), 'utf8'))
     .replace(/^import[^\n]*\n/gm, '').replace(/\ninit\(\);\s*$/, '\n');

@@ -33,6 +33,20 @@ test('连接中心：多个令牌按模型路由、验证、冲突和公开脱�
  assert.equal((await send('/api/text-chat','POST',{model:'text-a',messages:[{role:'user',content:'hello'}]})).status,400);
 });
 
+test('连接中心：更改接口类型时必须输入该平台令牌，不能沿用其他平台的密钥', async t => {
+  let speechReads = 0;
+  const { app, send } = await connectionApp(t, { speechFetcher: async () => { speechReads += 1; throw new Error('不应读取旧密钥'); } });
+  const original = await (await send('/api/connections', 'PUT', {
+    name: '原语言接口', kind: 'text', models: ['text-original'], apiKey: 'original-text-secret',
+  })).json();
+  const changed = { id: original.id, name: '新语音接口', kind: 'speech',
+    baseUrl: 'https://api.minimax.cn', models: ['speech-2.8-hd'], apiKey: '' };
+  assert.equal((await send('/api/connections/models', 'POST', changed)).status, 400);
+  assert.equal((await send('/api/connections', 'PUT', changed)).status, 400);
+  assert.equal(speechReads, 0);
+  assert.equal((await app.store.connections())[0].apiKey, 'original-text-secret');
+});
+
 async function connectionApp(t, options = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'jingce-delete-connections-'));
   const app = await createStudio({ root, catalog: [], imageCatalog: [], textCatalog: [], tools: { ready: false }, ...options });

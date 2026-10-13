@@ -27,6 +27,15 @@ $taskCopies = @(
     @{ From = 'docs\连接配置示例.json'; To = 'docs\连接配置示例.json' },
     @{ From = 'docs\服务器部署与同步.md'; To = 'docs\服务器部署与同步.md' },
     @{ From = 'docs\技能库与对话图片.md'; To = 'docs\技能库与对话图片.md' },
+    @{ From = 'docs\Blender预演工作流.md'; To = 'docs\Blender预演工作流.md' },
+    @{ From = 'tools\blender-previs.py'; To = 'tools\blender-previs.py' },
+    @{ From = 'tools\blender-helper.mjs'; To = 'tools\blender-helper.mjs' },
+    @{ From = 'tools\blender-helper\start.cmd'; To = 'tools\blender-helper\start.cmd' },
+    @{ From = 'tools\blender-helper\install.ps1'; To = 'tools\blender-helper\install.ps1' },
+    @{ From = 'tools\blender-helper\setup.cmd'; To = 'tools\blender-helper\setup.cmd' },
+    @{ From = 'tools\blender-helper\setup.ps1'; To = 'tools\blender-helper\setup.ps1' },
+    @{ From = 'tools\verify-previs-render.mjs'; To = 'tools\verify-previs-render.mjs' },
+    @{ From = 'tools\verify-previs-browser.mjs'; To = 'tools\verify-previs-browser.mjs' },
     @{ From = 'docs\图片接口核对.md'; To = 'docs\图片接口核对.md' },
     @{ From = 'examples\雨夜书店.json'; To = 'examples\雨夜书店.json' },
     @{ From = 'test\browser-canvas-enhancements.mjs'; To = 'test\browser-canvas-enhancements.mjs' },
@@ -54,13 +63,15 @@ $taskCopies = @(
 )
 foreach ($taskGroup in @(
     @{ Directory = 'lib'; Extensions = @('.mjs'); Suffix = '' },
-    @{ Directory = 'public'; Extensions = @('.html', '.js', '.css'); Suffix = '' },
-    @{ Directory = 'test'; Extensions = @('.mjs'); Suffix = '.test.mjs' }
+    @{ Directory = 'public'; Extensions = @('.html', '.js', '.css', '.png'); Suffix = '' },
+    @{ Directory = 'test'; Extensions = @('.mjs'); Suffix = '.test.mjs' },
+    @{ Directory = 'test\support'; Extensions = @('.mjs'); Suffix = '' }
 )) {
     $taskSourceDirectory = Get-Item -LiteralPath (Join-Path $taskRoot $taskGroup.Directory)
     if ($taskSourceDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Source directory cannot be a link.' }
     foreach ($taskItem in Get-ChildItem -LiteralPath $taskSourceDirectory.FullName -Force) {
         if ($taskItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Source group contains a link.' }
+        if ($taskItem.PSIsContainer -and $taskGroup.Directory -eq 'test' -and $taskItem.Name -eq 'support') { continue }
         if ($taskItem.PSIsContainer -or $taskGroup.Extensions -notcontains $taskItem.Extension) { throw 'Source group contains an unexpected file.' }
         if ($taskGroup.Suffix -and -not $taskItem.Name.EndsWith($taskGroup.Suffix)) { continue }
         $taskRelative = Join-Path $taskGroup.Directory $taskItem.Name

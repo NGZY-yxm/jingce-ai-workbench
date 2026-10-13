@@ -10,6 +10,8 @@ import { capabilitySummary } from './model-capabilities.js';
 import { videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote } from './video-parameters.js';
 import { IMAGE_RATIOS, IMAGE_QUALITIES, IMAGE_STYLES, IMAGE_CONTROL_NOTE, IMAGE_GENERATION_COUNT_MAX, IMAGE_ACTIVE_STATES, isImageGenerationNode, normalizeImageConfig, resolveImageInputs, imageRequestIssue, syncImageCardJobs, imageModelReferenceLimit, imageEstimate, imageEstimateText } from './image-parameters.js';
 import { AI_MODES, normalizeAiConfig } from './ai-text.js';
+import { SPEECH_MODELS, SPEECH_EMOTIONS, SPEECH_TEXT_LIMIT, speechCharacterCount, speechEmotionSupported, normalizeSpeechDraft, estimateSpeechCost, isSpeechGenerationNode } from './speech-parameters.js';
+import { assetThumbnailUrl } from './media-thumbnails.js';
 
 const clone = value => structuredClone(value);
 const uid = () => crypto.randomUUID();
@@ -60,6 +62,8 @@ const readImageDimensions = asset => new Promise(resolve => {
 const labels = { preparing: '上传素材中', waiting: '等待提交', submitting: '提交中', queued: '平台排队中', running: '生成中', downloading: '保存中', saving: '保存图片中',
   download_pending: '待下载', done: '已完成', failed: '未完成', uncertain: '需核对平台', attention: '需手动查询' };
 const activeStates = new Set(['waiting', 'preparing', 'submitting', 'queued', 'running', 'downloading', 'saving', 'download_pending', 'uncertain', 'attention']);
+const speechLabels = { waiting: '等待提交', submitting: '生成中', saving: '保存中', save_pending: '待保存', done: '已完成', failed: '未完成', uncertain: '需核对平台' };
+const activeSpeechStates = new Set(['waiting', 'submitting', 'saving', 'save_pending', 'uncertain']);
 const info = {
   text: ['Ｔ', '记录想法，或把提示词准备成视频卡片。', '创建视频卡片', 'canvas'],
   ai: ['✦', '把上游文字整理成脚本、分镜或可直接使用的生成提示词。', '运行 AI 创作', 'text'],
@@ -68,7 +72,7 @@ const info = {
   storyboard: ['▦', '调整视频内容、次序和生成参数。', '查看视频生成项', 'videos'],
   image: ['▧', '放置图片，让构图和场景更直观。', '选择图片素材', 'assets'],
   video: ['▷', '添加视频卡片，编辑提示词并生成候选视频。', '关联视频卡片', 'videos'],
-  audio: ['♫', '把音乐、对白或氛围声放到工作区。', '选择声音素材', 'assets'],
+  audio: ['♫', '连接文字生成配音，或从素材库选择音乐、对白和氛围声。', '生成配音', 'speech'],
   compose: ['▧', '查看已经生成的图片与视频，预览、下载或继续创作。', '生成结果', 'results'],
 };
 
@@ -126,9 +130,10 @@ export function createInfiniteCanvas(bridge) {
   let projectId = '', selection = new Set(), selectedLink = '', connectionFrom = '', connectionTargetId = '', tool = 'select', spaceDown = false;
   let interaction = null, hoverPoint = null, contextPoint = null, insertionIndex = 0, suppressClick = false, suppressContextMenuUntil = 0;
   let undo = [], redo = [], editBefore = null, relinkNodeId = '', panelPoint = null, minimapBounds = null;
-  let activeCoverCard = null, coverHideTimer = 0;
+  let activeCoverCard = null;
+  const speechSubmitting = new Set();
   let hoveredLink = '', hoveredReference = null, focusedReference = null, promptReference = null;
-  const cards = new Map(), groupFrames = new Map(), signatures = new Map(), coverEntries = new WeakMap(), referenceSignatures = new WeakMap();
+  const cards = new Map(), groupFrames = new Map(), signatures = new Map(), referenceSignatures = new WeakMap();
   const state = () => bridge.getState();
   const project = () => state().project;
   const graph = () => project().graph;
@@ -140,36 +145,24 @@ export function createInfiniteCanvas(bridge) {
   const center = () => screenToWorld({ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 }, graph().viewport);
   const report = error => bridge.toast(error.message || '画布操作未完成。', true);
 
-  function clearCoverHideTimer() {
-    if (!coverHideTimer) return;
-    clearTimeout(coverHideTimer); coverHideTimer = 0;
+  function closeCoverDetails() {
+    if (!activeCoverCard) return;
+    activeCoverCard.classList.remove('details-open');
+    activeCoverCard.setAttribute('aria-expanded', 'false');
+    settleCoverControls(activeCoverCard);
+    activeCoverCard = null;
   }
   function showCoverDetails(card) {
     if (!card?.classList?.contains('cover-card')) return;
-    clearCoverHideTimer();
-    if (activeCoverCard && activeCoverCard !== card) {
-      activeCoverCard.classList.remove('details-open');
-      settleCoverControls(activeCoverCard);
-    }
+    if (activeCoverCard && activeCoverCard !== card) closeCoverDetails();
     activeCoverCard = card;
     card.classList.add('details-open');
+    card.setAttribute('aria-expanded', 'true');
     positionCoverDetails(card);
-  }
-  function scheduleCoverDetailsHide(card) {
-    if (!card || activeCoverCard !== card) return;
-    clearCoverHideTimer();
-    coverHideTimer = setTimeout(() => {
-      coverHideTimer = 0;
-      if (activeCoverCard !== card || card.matches?.(':hover,:focus-within,.is-playing')) return;
-      card.classList.remove('details-open');
-      activeCoverCard = null;
-      settleCoverControls(card);
-    }, 520);
   }
 
   function reset() {
-    clearCoverHideTimer();
-    activeCoverCard = null;
+    closeCoverDetails();
     projectId = project()?.id || ''; selection.clear(); selectedLink = ''; connectionFrom = ''; connectionTargetId = '';
     undo = []; redo = []; editBefore = null; interaction = null; insertionIndex = 0; relinkNodeId = ''; suppressContextMenuUntil = 0;
     cards.clear(); groupFrames.clear(); signatures.clear(); groupsLayer.replaceChildren(); nodesLayer.replaceChildren(); contextMenu.hidden = true; marquee.hidden = true;
@@ -373,7 +366,7 @@ export function createInfiniteCanvas(bridge) {
     viewport.style.setProperty('--canvas-dot-size', `${24 * view.zoom}px`);
     viewport.style.setProperty('--canvas-dot-x', `${view.x}px`); viewport.style.setProperty('--canvas-dot-y', `${view.y}px`);
     $('#zoom-level').textContent = `${Math.round(view.zoom * 100)}%`; drawLinks(); drawMinimap();
-    for (const card of cards.values()) if (card.matches?.(':hover,:focus-within,.is-playing,.details-open')) positionCoverDetails(card);
+    if (activeCoverCard) positionCoverDetails(activeCoverCard);
   }
   function fit() {
     if (!project() || !visible() || !viewport.clientWidth) return;
@@ -405,7 +398,7 @@ export function createInfiniteCanvas(bridge) {
     let node;
     changeGraph(() => { node = baseNode('text', '灵感便签', point); node.note = note;
       graph().nodes.push(node); selection = new Set([node.id]); selectedLink = ''; });
-    if (!note) { const input = cards.get(node.id)?.querySelector('[data-node-field="note"]'); input?.focus(); }
+    if (!note) { const card = cards.get(node.id); showCoverDetails(card); card?.querySelector('[data-node-field="note"]')?.focus(); }
     return node;
   }
   function addAi(point, sourceNode = null) {
@@ -421,7 +414,7 @@ export function createInfiniteCanvas(bridge) {
       if (sourceNode && !validateCanvasLink(graph(), state().kinds, sourceNode.id, node.id)) graph().links.push(proposedLink(sourceNode.id, node.id));
       selection = new Set([node.id]); selectedLink = '';
     });
-    const card = cards.get(node?.id);
+    const card = cards.get(node?.id); showCoverDetails(card);
     card?.querySelector('[data-ai-field="instruction"]')?.focus({ preventScroll: true });
     return node;
   }
@@ -438,6 +431,22 @@ export function createInfiniteCanvas(bridge) {
     })) return;
     const card = cards.get(node?.id);showCoverDetails(card);
     card?.querySelector('[data-image-field="prompt"]')?.focus({preventScroll:true});
+    return node;
+  }
+  function addSpeech(point, sourceNode = null, text = '') {
+    if (!ensureCapacity()) return;
+    let node;
+    const upstream = sourceNode?.kind === 'ai' ? normalizeAiConfig(sourceNode.aiConfig).output : sourceNode?.note || '';
+    if (!changeGraph(() => {
+      node = baseNode('audio', '新的语音', point || (sourceNode ? clearSpace({ x: sourceNode.x + sourceNode.width + 90, y: sourceNode.y }, CARD_WIDTH, CARD_HEIGHT) : null));
+      node.role = 'speech-generation';
+      node.speechConfig = normalizeSpeechDraft({ model: state().speechCatalog?.[0] || SPEECH_MODELS[0], text: String(text || upstream).slice(0, SPEECH_TEXT_LIMIT) });
+      graph().nodes.push(node);
+      if (sourceNode && !validateCanvasLink(graph(), state().kinds, sourceNode.id, node.id)) graph().links.push(proposedLink(sourceNode.id, node.id));
+      selection = new Set([node.id]); selectedLink = '';
+    })) return;
+    const card = cards.get(node?.id); showCoverDetails(card);
+    card?.querySelector('[data-speech-field="text"]')?.focus({ preventScroll: true });
     return node;
   }
   function addShot(point, sourceNode = null, scene = null, prompt = '') {
@@ -609,15 +618,25 @@ export function createInfiniteCanvas(bridge) {
 
   function mediaMarkup(asset, className = 'canvas-media', cover = false) {
     const src = `/api/assets/${encodeURIComponent(asset.id)}`;
-    if (asset.kind === 'image') return `<img class="${className}" src="${src}" alt="${escapeHtml(asset.name)}" loading="lazy" draggable="false">`;
+    if (asset.kind === 'image') return `<img class="${className}" src="${assetThumbnailUrl(asset.id)}" alt="${escapeHtml(asset.name)}" loading="lazy" draggable="false">`;
     if (asset.kind === 'audio') return `<div class="canvas-audio-art">♫</div><audio class="${className}" controls preload="none" src="${src}" aria-label="${escapeHtml(asset.name)}"></audio>`;
-    return `<video class="${className}" ${cover ? 'data-cover-video' : 'controls'} playsinline preload="auto" src="${src}#t=0.1" aria-label="${escapeHtml(asset.name)}"></video>`;
+    if (cover) return `<video class="${className}" data-cover-video playsinline preload="none" poster="${assetThumbnailUrl(asset.id)}" data-media-src="${src}" aria-label="${escapeHtml(asset.name)}"></video>`;
+    return `<img class="${className}" src="${assetThumbnailUrl(asset.id)}" alt="${escapeHtml(asset.name)}视频缩略图" loading="lazy" draggable="false">`;
+  }
+  function defaultCoverMarkup(kind, title) {
+    const iconName = { text: 'Text', ai: 'Sparkles', image: 'Image', video: 'Clapperboard', audio: 'AudioLines',
+      brief: 'Compass', script: 'FileText', storyboard: 'LayoutGrid', compose: 'GalleryHorizontal' }[kind] || 'LayoutGrid';
+    const icon = bridge.icon?.(iconName) || info[kind]?.[0] || '✦';
+    return `<div class="canvas-simple-preview canvas-frosted-placeholder"><span class="canvas-frosted-icon" aria-hidden="true">${icon}</span><strong>${escapeHtml(title)}</strong></div>`;
+  }
+  function detailHeading(node, kicker, title, hasVideo = false) {
+    return `<div class="canvas-detail-heading"><div><span class="canvas-detail-kicker">${escapeHtml(kicker)}</span><input class="canvas-detail-title" data-node-field="label" aria-label="卡片名称" value="${escapeHtml(title)}" maxlength="80" spellcheck="false"></div><div class="canvas-detail-actions">${hasVideo ? '<button type="button" class="canvas-cover-play" data-card-action="play-cover" aria-label="播放视频" title="播放或暂停视频">播放</button>' : ''}<button type="button" class="canvas-detail-remove" data-card-action="remove" aria-label="移除卡片" title="移除画布卡片，保留原素材">移除</button><button type="button" data-card-action="close-details" aria-label="关闭卡片详情" title="关闭详情">×</button></div></div>`;
   }
   function assetMarkup(node) {
     const asset = project().assets.find(item => !item.deletedAt && item.id === node.assetId);
     if (!asset) return `<div class="canvas-missing"><span>${info[node.kind][0]}</span><strong>${escapeHtml(node.assetName || '素材尚未关联')}</strong><p>素材已移除或尚未关联，请重新选择素材。</p><button class="button" data-card-action="relink">选择${{ image: '图片', video: '视频', audio: '声音' }[node.kind]}</button></div>`;
     const cover = ['image', 'video'].includes(asset.kind);
-    return `${cover ? `<div class="canvas-cover">${mediaMarkup(asset, 'canvas-media', true)}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div></div><div class="canvas-hover-details"><div class="canvas-details-content">` : mediaMarkup(asset)}<div class="canvas-media-meta"><span>${{ image: '图片', video: '视频', audio: '声音' }[asset.kind]}${asset.duration ? ` · ${Number(asset.duration).toFixed(1)} 秒` : ''}</span><span>${asset.source === 'model' ? '模型生成' : '本机素材'}</span></div>
+    return `${cover ? `<div class="canvas-cover">${mediaMarkup(asset, 'canvas-media', true)}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div></div><div class="canvas-hover-details" aria-label="${escapeHtml(node.label)}详情">${detailHeading(node, '画布素材', node.label, asset.kind === 'video')}<div class="canvas-details-content">` : mediaMarkup(asset)}<div class="canvas-media-meta"><span>${{ image: '图片', video: '视频', audio: '声音' }[asset.kind]}${asset.duration ? ` · ${Number(asset.duration).toFixed(1)} 秒` : ''}</span><span>${asset.source === 'model' ? '模型生成' : '本机素材'}</span></div>
       <div class="canvas-node-footer"><span class="canvas-reference-hint">${asset.kind === 'audio' ? '可连接到支持音频输入的视频模型；其他模型会忽略音频' : ['image', 'video'].includes(asset.kind) ? '右侧端口可连接到其他视频卡片' : ''}</span><button data-card-action="preview">放大预览 ↗</button><a href="/api/assets/${encodeURIComponent(asset.id)}?download=1" download>下载原文件 ↓</a></div>${cover ? '</div></div>' : ''}`;
   }
   function shotData(scene, node) {
@@ -656,7 +675,7 @@ export function createInfiniteCanvas(bridge) {
     return '<section class="shot-references" aria-label="当前视频参考素材"><div class="shot-reference-heading"><strong>参考素材 · ' + references.length + '</strong></div>'
       + (references.length ? '<div class="shot-reference-list compact-reference-list">' + references.map((reference,index) => {
         const label = referenceLabel(references,index), asset = project().assets.find(item => !item.deletedAt && item.id === reference.assetId);
-        const thumb = asset ? asset.kind === 'image' ? '<img loading="lazy" draggable="false" src="/api/assets/' + encodeURIComponent(asset.id) + '" alt="">' : asset.kind === 'audio' ? '<span>♫</span>' : '<video muted playsinline preload="metadata" src="/api/assets/' + encodeURIComponent(asset.id) + '"></video>' : '<span>?</span>';
+        const thumb = asset ? ['image', 'video'].includes(asset.kind) ? '<img loading="lazy" draggable="false" src="' + assetThumbnailUrl(asset.id) + '" alt="">' : '<span>♫</span>' : '<span>?</span>';
         const key = escapeHtml(referenceKey(reference)), source = referenceSource(reference);
         const role = reference.role === 'end_frame' ? 'last_frame' : reference.role || 'reference_image';
         const roleControl = reference.kind === 'image' && bridge.parameters(scene)?.model?.referenceSupport?.protocol === 'content-v3'
@@ -670,14 +689,17 @@ export function createInfiniteCanvas(bridge) {
   function shotMarkup(scene, node) {
     const { p, active, submitting, assets, preview, disabled, label, estimate, hint } = shotData(scene, node);
     const controls = videoParameterControls(p, state().catalog || [], state().settings.generationCountMax || 5, submitting, scene.videoModel || state().settings.videoModel);
-    return `<div class="canvas-cover shot-preview">${preview ? mediaMarkup(preview, 'canvas-media', true) : `<div class="shot-preview-empty"><span>▷</span><p>${active ? '视频生成中' : '等待生成视频'}</p></div>`}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div></div>
-      <div class="canvas-hover-details"><div class="canvas-details-content"><div class="shot-fields"><label class="reference-prompt-editor">视频提示词 <span class="prompt-at-hint">输入 @ 选择素材</span><textarea class="shot-prompt" data-reference-prompt data-shot-field="videoPrompt" aria-label="${escapeHtml(scene.title)}视频提示词" rows="3" maxlength="4000" placeholder="描述主体、动作、场景、画面运动和画面风格…">${escapeHtml(scene.videoPrompt)}</textarea><div class="reference-mention-menu" role="listbox" aria-label="可引用的素材" hidden></div></label>
-      ${referenceMarkup(scene)}<div class="shot-params">${Object.entries(controls).map(([field, config]) => `<label>${config.label}<select data-shot-field="${field}" aria-label="${escapeHtml(scene.title)}${config.label}"${config.disabled ? ' disabled' : ''}>${config.options.map(item => option(item.value, item.label, config.value)).join('')}</select></label>`).join('')}</div>
-      <div class="shot-estimate"><strong>${escapeHtml(estimate)}</strong><small>${escapeHtml(p.model?.name || '选择视频模型后显示接口参数')} · ${escapeHtml(p.ratio || '模型默认比例')} · ${escapeHtml(p.resolution || '模型默认画质')} · ${escapeHtml(videoPricingNote(p))}</small><button type="button" class="text-button" data-model-capability="video" data-capability-model="${escapeHtml(p.model?.name || '')}">查看 / 补充模型能力</button></div>
-      <button class="primary full shot-generate" data-card-action="generate"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button><p class="shot-hint">${escapeHtml(hint)}</p>
-      ${assets.length ? `<div class="shot-candidates"><div><strong>候选视频 · ${assets.length}</strong><button data-card-action="expand-candidates">展开对比 ↗</button></div><select data-preview-candidate aria-label="${escapeHtml(scene.title)}预览候选视频">${assets.map((asset, index) => option(asset.id, `${asset.variantIndex || index + 1} · ${asset.name}${asset.id === scene.videoAssetId ? ' ✓ 当前结果' : ''}`, preview?.id)).join('')}</select><p class="shot-hint">从本卡右侧端口拉线到另一个视频卡片，即可参考当前预览视频。</p><div class="canvas-node-footer"><button data-card-action="select-candidate" data-asset-id="${escapeHtml(preview?.id || '')}"${preview?.id === scene.videoAssetId ? ' disabled' : ''}>${preview?.id === scene.videoAssetId ? '✓ 当前结果' : '设为当前结果'}</button>${preview ? `<button data-card-action="place-asset" data-asset-id="${escapeHtml(preview.id)}">放到画布作为参考</button><a href="/api/assets/${encodeURIComponent(preview.id)}?download=1" download>下载 ↓</a>` : ''}</div></div>` : ''}
-      <div class="canvas-node-footer">${preview ? '<button data-card-action="preview-cover">放大预览 ↗</button>' : '<button data-card-action="details">视频详情 ↗</button>'}</div></div></div></div>`;
+    return `<div class="canvas-cover shot-preview">${preview ? mediaMarkup(preview, 'canvas-media', true) : defaultCoverMarkup('video', 'AI 视频')}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div></div>
+      <div class="canvas-hover-details" aria-label="${escapeHtml(scene.title)}详情">${detailHeading(node, '视频创作', scene.title, Boolean(preview))}<div class="canvas-details-content canvas-composer">
+      <label class="reference-prompt-editor"><span class="canvas-prompt-label">视频提示词</span><span class="prompt-at-hint">输入 @ 选择素材</span><textarea class="shot-prompt" data-reference-prompt data-shot-field="videoPrompt" aria-label="${escapeHtml(scene.title)}视频提示词" rows="4" maxlength="4000" placeholder="描述主体、动作、场景、运镜和风格…">${escapeHtml(scene.videoPrompt)}</textarea><div class="reference-mention-menu" role="listbox" aria-label="可引用的素材" hidden></div></label>
+      ${referenceMarkup(scene)}
+      <div class="canvas-composer-toolbar"><div class="shot-params canvas-composer-controls">${Object.entries(controls).map(([field, config]) => `<label><span class="canvas-option-label">${config.label}</span><select data-shot-field="${field}" aria-label="${escapeHtml(scene.title)}${config.label}" title="${config.label}"${config.disabled ? ' disabled' : ''}>${config.options.map(item => option(item.value, item.label, config.value)).join('')}</select></label>`).join('')}</div><div class="shot-estimate canvas-composer-cost"><strong>${escapeHtml(estimate)}</strong><small>${escapeHtml(p.model?.name || '')} · ${escapeHtml(videoPricingNote(p))}</small></div><button class="primary shot-generate canvas-composer-submit" data-card-action="generate" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button></div>
+      <p class="shot-hint"${active || disabled ? '' : ' hidden'}>${escapeHtml(hint)}</p>
+      <details class="canvas-composer-more"><summary>更多设置</summary><button type="button" class="text-button" data-model-capability="video" data-capability-model="${escapeHtml(p.model?.name || '')}">模型能力</button></details>
+      ${assets.length ? `<div class="shot-candidates"><div><strong>候选视频 · ${assets.length}</strong><button data-card-action="expand-candidates">展开对比 ↗</button></div><select data-preview-candidate aria-label="${escapeHtml(scene.title)}预览候选视频">${assets.map((asset, index) => option(asset.id, `${asset.variantIndex || index + 1} · ${asset.name}${asset.id === scene.videoAssetId ? ' ✓ 当前结果' : ''}`, preview?.id)).join('')}</select><div class="canvas-node-footer"><button data-card-action="select-candidate" data-asset-id="${escapeHtml(preview?.id || '')}"${preview?.id === scene.videoAssetId ? ' disabled' : ''}>${preview?.id === scene.videoAssetId ? '✓ 当前结果' : '设为当前结果'}</button>${preview ? `<button data-card-action="place-asset" data-asset-id="${escapeHtml(preview.id)}">放到画布</button><a href="/api/assets/${encodeURIComponent(preview.id)}?download=1" download>下载 ↓</a>` : ''}</div></div>` : ''}
+      ${preview ? '<div class="canvas-node-footer"><button data-card-action="preview-cover">放大预览 ↗</button></div>' : ''}</div></div>`;
   }
+
   function imageData(node) {
     const config = normalizeImageConfig(node.imageConfig);
     const models = state().imageCatalog || [], inputs = resolveImageInputs(project(),node);
@@ -711,14 +733,14 @@ export function createInfiniteCanvas(bridge) {
   }
   const imageOption = (id,label,value) => `<option value="${escapeHtml(id)}"${id === value ? ' selected' : ''}>${escapeHtml(label)}</option>`;
   function imageCover(asset) {
-    return `${asset ? mediaMarkup(asset,'canvas-media',true) : '<div class="shot-preview-empty image-preview-empty"><span>✦</span><strong>AI 生图</strong><p>打开详情，描述你想生成的画面</p></div>'}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div>`;
+    return `${asset ? mediaMarkup(asset,'canvas-media',true) : defaultCoverMarkup('image', 'AI 生图')}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div>`;
   }
   function imageInputsMarkup(node,inputs) {
     if (!inputs.references.length && !inputs.textInputs.length) return '<div class="image-inputs shot-references"><strong>参考素材</strong><p class="shot-hint">可从文字便签、图片素材或已生成图片的右端口连到本卡左端口。</p></div>';
     const items = inputs.references.map((reference,index) => {
       const link = graph().links.find(link => link.to === node.id && link.from === reference.nodeId);
       const key = escapeHtml(referenceKey(reference));
-      return `<div class="image-reference-row" data-canvas-reference-key="${key}" title="图片${index+1}：${escapeHtml(reference.name)}">${reference.assetId ? `<img src="/api/assets/${encodeURIComponent(reference.assetId)}" alt="${escapeHtml(reference.name)}" loading="lazy">` : '<span class="image-reference-empty">▧</span>'}<span class="reference-number">${index+1}</span>${referenceSource(reference) ? `<button type="button" class="canvas-reference-locate" data-card-action="locate-reference" data-reference-key="${key}" aria-label="定位图片${index+1}来源卡片" title="定位图片${index+1}来源卡片">&#8982;</button>` : ''}<button data-card-action="image-disconnect" data-link-id="${escapeHtml(link?.id || '')}" aria-label="断开图片${index+1}">×</button></div>`;
+      return `<div class="image-reference-row" data-canvas-reference-key="${key}" title="图片${index+1}：${escapeHtml(reference.name)}">${reference.assetId ? `<img src="${assetThumbnailUrl(reference.assetId)}" alt="${escapeHtml(reference.name)}" loading="lazy">` : '<span class="image-reference-empty">▧</span>'}<span class="reference-number">${index+1}</span>${referenceSource(reference) ? `<button type="button" class="canvas-reference-locate" data-card-action="locate-reference" data-reference-key="${key}" aria-label="定位图片${index+1}来源卡片" title="定位图片${index+1}来源卡片">&#8982;</button>` : ''}<button data-card-action="image-disconnect" data-link-id="${escapeHtml(link?.id || '')}" aria-label="断开图片${index+1}">×</button></div>`;
     }).join('');
     const texts = inputs.textInputs.map(input => `<p class="image-text-input">Ｔ ${escapeHtml(input.name)} · ${escapeHtml(input.text.slice(0,80))}${input.text.length>80?'…':''}</p>`).join('');
     return `<div class="image-inputs shot-references"><strong>参考素材 · ${inputs.references.length} 张图片 / ${inputs.textInputs.length} 条文字</strong><div class="compact-image-references">${items}</div>${texts}</div>`;
@@ -727,26 +749,26 @@ export function createInfiniteCanvas(bridge) {
     const {config,models,model,inputs,job,asset,preview,candidates,disabled,label,hint,estimate} = imageData(node);
     const missingModel = config.model && !models.some(model => model.name === config.model);
     const selected = Boolean(preview?.id && preview.id === node.selectedAssetId);
-    return `<div class="canvas-cover">${imageCover(preview)}</div><div class="canvas-hover-details"><div class="canvas-details-content image-details">
-      <div class="image-detail-heading"><strong>生图设置</strong><span>每张卡片独立保存</span></div>
-      <div class="shot-fields image-fields"><label>生图模型<select data-image-field="model" aria-label="生图模型">${!config.model ? imageOption('','请选择生图模型',config.model):''}${missingModel ? imageOption(config.model,config.model,config.model):''}${models.map(model => imageOption(model.name,model.name,config.model)).join('')}</select></label>
-      <div class="form-pair"><label>比例<select data-image-field="ratio" aria-label="生图比例">${IMAGE_RATIOS.filter(([id])=>!models.find(model=>model.name===config.model)?.capabilities || models.find(model=>model.name===config.model).capabilities.ratios.includes(id)).map(([id,label]) => imageOption(id,label,config.ratio)).join('')}</select></label><label>画质<select data-image-field="quality" aria-label="生图画质">${IMAGE_QUALITIES.filter(([id])=>!models.find(model=>model.name===config.model)?.capabilities || models.find(model=>model.name===config.model).capabilities.qualities.includes(id)).map(([id,label]) => imageOption(id,label,config.quality)).join('')}</select></label></div>
-       <div class="form-pair"><label>风格<select data-image-field="style" aria-label="生图风格">${IMAGE_STYLES.map(([id,label]) => imageOption(id,label,config.style)).join('')}</select></label><label>生成张数<select data-image-field="count" aria-label="生图生成张数">${Array.from({length:IMAGE_GENERATION_COUNT_MAX},(_,index) => imageOption(index+1,(index+1)+' 张',config.count)).join('')}</select></label></div>
-       <div class="shot-estimate image-estimate"><strong>${escapeHtml(imageEstimateText(estimate))}</strong><small>按当前图片模型目录估算；最终扣费以平台为准。</small></div>
-       <p class="shot-hint image-control-note">${escapeHtml(IMAGE_CONTROL_NOTE)}</p>
-       <p class="shot-hint image-capability-summary">${escapeHtml(capabilitySummary(model?.capabilities,'image'))}</p><button type="button" class="text-button" data-model-capability="image" data-capability-model="${escapeHtml(config.model)}">查看 / 补充模型能力</button>
-      <label class="reference-prompt-editor">图片提示词 <span class="prompt-at-hint">输入 @ 选择参考图片</span><textarea data-reference-prompt data-image-field="prompt" aria-label="图片提示词" rows="5" maxlength="4000" placeholder="描述主体、场景、光线、构图和希望保留的细节…">${escapeHtml(config.prompt)}</textarea><div class="reference-mention-menu" role="listbox" aria-label="可引用的参考图片" hidden></div></label></div>
+    return `<div class="canvas-cover">${imageCover(preview)}</div><div class="canvas-hover-details" aria-label="${escapeHtml(node.label)}详情">${detailHeading(node, '图片创作', node.label)}<div class="canvas-details-content image-details canvas-composer">
+      <label class="reference-prompt-editor image-prompt-lead"><span class="canvas-prompt-label">图片提示词</span><span class="prompt-at-hint">输入 @ 选择参考图片</span><textarea data-reference-prompt data-image-field="prompt" aria-label="图片提示词" rows="4" maxlength="4000" placeholder="描述主体、场景、构图、光线和风格…">${escapeHtml(config.prompt)}</textarea><div class="reference-mention-menu" role="listbox" aria-label="可引用的参考图片" hidden></div></label>
       ${imageInputsMarkup(node,inputs)}
-      <button class="primary full image-generate" data-card-action="image-generate"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button>
-      <p class="shot-hint image-submit-hint">${escapeHtml(hint)}</p>
-      <button class="text-button image-refresh" data-card-action="image-refresh">刷新任务状态</button>
-      <div class="image-job-status" role="status" aria-live="polite">${escapeHtml(job ? (labels[job.state] || job.state) + ' · ' + job.message : '尚未提交生图任务')}</div>
+      <div class="canvas-composer-toolbar"><div class="shot-fields image-fields canvas-composer-controls">
+      <label><span class="canvas-option-label">生图模型</span><select data-image-field="model" aria-label="生图模型" title="生图模型">${!config.model ? imageOption('','请选择生图模型',config.model):''}${missingModel ? imageOption(config.model,config.model,config.model):''}${models.map(model => imageOption(model.name,model.name,config.model)).join('')}</select></label>
+      <label><span class="canvas-option-label">比例</span><select data-image-field="ratio" aria-label="生图比例" title="比例">${IMAGE_RATIOS.filter(([id])=>!model?.capabilities || model.capabilities.ratios.includes(id)).map(([id,label]) => imageOption(id,label,config.ratio)).join('')}</select></label>
+      <label><span class="canvas-option-label">画质</span><select data-image-field="quality" aria-label="生图画质" title="画质">${IMAGE_QUALITIES.filter(([id])=>!model?.capabilities || model.capabilities.qualities.includes(id)).map(([id,label]) => imageOption(id,label,config.quality)).join('')}</select></label>
+      <label><span class="canvas-option-label">张数</span><select data-image-field="count" aria-label="生图生成张数" title="张数">${Array.from({length:IMAGE_GENERATION_COUNT_MAX},(_,index) => imageOption(index+1,(index+1)+' 张',config.count)).join('')}</select></label>
+      </div><div class="shot-estimate image-estimate canvas-composer-cost"><strong>${escapeHtml(imageEstimateText(estimate))}</strong><small>最终扣费以平台为准</small></div><button class="primary image-generate canvas-composer-submit" data-card-action="image-generate" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button></div>
+      <p class="shot-hint image-submit-hint"${disabled ? '' : ' hidden'}>${escapeHtml(hint)}</p>
+      <details class="canvas-composer-more"><summary>更多设置</summary><label>风格<select data-image-field="style" aria-label="生图风格">${IMAGE_STYLES.map(([id,label]) => imageOption(id,label,config.style)).join('')}</select></label><button type="button" class="text-button" data-model-capability="image" data-capability-model="${escapeHtml(config.model)}">模型能力</button></details>
+      <button class="text-button image-refresh" data-card-action="image-refresh"${job ? '' : ' hidden'}>刷新任务状态</button>
+      <div class="image-job-status" role="status" aria-live="polite"${job ? '' : ' hidden'}>${escapeHtml(job ? (labels[job.state] || job.state) + ' · ' + job.message : '')}</div>
       <button class="button full image-retry" data-card-action="image-retry"${job?.state === 'download_pending' ? '' : ' hidden'}>重试保存图片</button>
       ${job ? `<details class="image-submitted-prompt"><summary>查看实际提交的提示词</summary><pre>${escapeHtml(job.prompt)}</pre></details>` : ''}
-       ${candidates.length > 1 ? `<section class="image-candidates" aria-label="候选图片"><div class="image-candidates-heading"><strong>候选图片 · ${candidates.length}</strong><span>预览后选择最终素材</span></div><select data-preview-candidate aria-label="预览候选图片">${candidates.map((item,index) => imageOption(item.id,`候选 ${item.variantIndex || index + 1} · ${item.name}${item.id === node.selectedAssetId ? ' ✓ 最终素材' : item.id === asset?.id ? ' · 当前素材' : ''}`,preview?.id)).join('')}</select><div class="canvas-node-footer image-output-actions"><button data-card-action="select-image-candidate" data-asset-id="${escapeHtml(preview?.id || '')}"${selected ? ' disabled' : ''}>${selected ? '✓ 最终素材' : '设为最终素材'}</button>${preview ? `<button data-card-action="preview" data-asset-id="${escapeHtml(preview.id)}">放大预览 ↗</button><a href="/api/assets/${encodeURIComponent(preview.id)}?download=1" download>下载图片 ↓</a>` : ''}</div><p class="shot-hint">切换候选仅供预览。选定最终素材后，其他候选完成时也会保留你的选择。</p></section>` : ''}
-       ${asset ? `<div class="canvas-node-footer image-output-actions"><button data-card-action="preview" data-asset-id="${escapeHtml(asset.id)}">放大预览 ↗</button><a href="/api/assets/${encodeURIComponent(asset.id)}?download=1" download>下载图片 ↓</a></div><div class="canvas-node-footer image-output-actions"><button data-card-action="image-create-next">参考这张图继续生图</button><button data-card-action="image-create-video">用这张图创建视频卡片</button></div><p class="shot-hint">右侧端口连接的是最终素材。每条连接保留连接时的图片，之后再次生图不会替换已连接素材。</p>` : ''}
+      ${candidates.length > 1 ? `<section class="image-candidates" aria-label="候选图片"><div class="image-candidates-heading"><strong>候选图片 · ${candidates.length}</strong></div><select data-preview-candidate aria-label="预览候选图片">${candidates.map((item,index) => imageOption(item.id,`候选 ${item.variantIndex || index + 1} · ${item.name}${item.id === node.selectedAssetId ? ' ✓ 最终素材' : item.id === asset?.id ? ' · 当前素材' : ''}`,preview?.id)).join('')}</select><div class="canvas-node-footer image-output-actions"><button data-card-action="select-image-candidate" data-asset-id="${escapeHtml(preview?.id || '')}"${selected ? ' disabled' : ''}>${selected ? '✓ 最终素材' : '设为最终素材'}</button>${preview ? `<button data-card-action="preview" data-asset-id="${escapeHtml(preview.id)}">放大预览 ↗</button><a href="/api/assets/${encodeURIComponent(preview.id)}?download=1" download>下载图片 ↓</a>` : ''}</div></section>` : ''}
+      ${asset ? `<div class="canvas-node-footer image-output-actions"><button data-card-action="preview" data-asset-id="${escapeHtml(asset.id)}">放大预览 ↗</button><a href="/api/assets/${encodeURIComponent(asset.id)}?download=1" download>下载图片 ↓</a><button data-card-action="image-create-next">继续生图</button><button data-card-action="image-create-video">创建视频卡</button></div>` : ''}
       </div></div>`;
   }
+
   function aiMarkup(node) {
     const config = normalizeAiConfig(node.aiConfig), inputs = bridge.aiInputs?.(node.id) || [];
     const models = state().textCatalog || [], selectedModel = config.model || state().settings.text?.textModel || models[0]?.name || '';
@@ -769,7 +791,7 @@ export function createInfiniteCanvas(bridge) {
       <label>当前结果<textarea class="ai-output" data-ai-field="output" rows="10" placeholder="运行后，模型结果会出现在这里；你也可以手动修改。">${escapeHtml(config.output)}</textarea></label>
       ${bridge.aiImagesMarkup?.(node) || ''}
       <div class="canvas-node-footer ai-output-actions"><span>${config.output ? '结果可继续连接到下游卡片' : '先生成或手动填写结果'}</span>${config.output ? '<button data-card-action="ai-create-text">另存文字卡</button>' : ''}</div>
-      <div class="ai-create-actions"><button class="button" data-card-action="ai-create-image"${config.output ? '' : ' disabled'}>创建生图卡</button><button class="button" data-card-action="ai-create-video"${config.output ? '' : ' disabled'}>创建视频卡</button>${hasScenes ? `<button class="button" data-card-action="ai-create-scenes">创建 ${config.scenes.length} 个镜头</button>` : ''}</div>
+      <div class="ai-create-actions"><button class="button" data-card-action="ai-create-image"${config.output ? '' : ' disabled'}>创建生图卡</button><button class="button" data-card-action="ai-create-video"${config.output ? '' : ' disabled'}>创建视频卡</button><button class="button" data-card-action="ai-create-speech"${config.output ? '' : ' disabled'}>生成配音</button>${hasScenes ? `<button class="button" data-card-action="ai-create-scenes">创建 ${config.scenes.length} 个镜头</button>` : ''}</div>
     </div>`;
   }
   function refreshImageControls(card,node) {
@@ -788,31 +810,82 @@ export function createInfiniteCanvas(bridge) {
     }
     const summary=card.querySelector('.image-capability-summary');if(summary)summary.textContent=capabilitySummary(data.model?.capabilities,'image');
     const capability=card.querySelector('[data-model-capability="image"]');if(capability)capability.dataset.capabilityModel=data.config.model;
-    if (button) {button.disabled=data.disabled;button.textContent=data.label;}
-    const hint = card.querySelector('.image-submit-hint');if (hint) hint.textContent=data.hint;
+    if (button) { button.disabled=data.disabled; button.textContent=data.label; button.setAttribute('aria-label',data.label); button.setAttribute('title',data.label); }
+    const hint = card.querySelector('.image-submit-hint'); if (hint) { hint.textContent=data.hint; hint.hidden=!data.disabled; }
     const estimate = card.querySelector('.image-estimate');
     if (estimate) estimate.innerHTML = `<strong>${escapeHtml(imageEstimateText(data.estimate))}</strong><small>按当前图片模型目录估算；最终扣费以平台为准。</small>`;
-    const status = card.querySelector('.image-job-status');if (status) status.textContent=data.job ? (labels[data.job.state] || data.job.state)+' · '+data.job.message : '尚未提交生图任务';
+    const status = card.querySelector('.image-job-status'); if (status) { status.textContent=data.job ? (labels[data.job.state] || data.job.state)+' · '+data.job.message : ''; status.hidden=!data.job; }
+    const refresh = card.querySelector('.image-refresh'); if (refresh) refresh.hidden=!data.job;
     const retry = card.querySelector('.image-retry');if (retry) retry.hidden=data.job?.state!=='download_pending';
     if (card.dataset.imageAsset !== (data.asset?.id || '') || card.dataset.imagePreview !== (data.preview?.id || '')) {
       const cover=card.querySelector('.canvas-cover');if (cover) cover.innerHTML=imageCover(data.preview);
       card.dataset.imageAsset=data.asset?.id || ''; card.dataset.imagePreview=data.preview?.id || '';
     }
   }
+  function speechData(node) {
+    const config = normalizeSpeechDraft(node.speechConfig);
+    const jobs = (state().speechJobs || []).filter(item => item.nodeId === node.id);
+    const job = jobs[0] || null;
+    const asset = project().assets.find(item => !item.deletedAt && item.kind === 'audio' && item.id === (node.assetId || job?.assetId));
+    const connection = (state().speechConnections || []).find(item => item.models?.includes(config.model) && item.hasKey);
+    const estimate = estimateSpeechCost(config.text, config.model, connection?.baseUrl === 'https://api.minimax.io' ? 'international' : 'domestic');
+    const pending = Boolean(bridge.speechPendingForNode?.(node.id));
+    const busy = speechSubmitting.has(node.id);
+    const blocked = Boolean(job && activeSpeechStates.has(job.state));
+    const disabled = busy || blocked || !connection || !config.text.trim() || speechCharacterCount(config.text) > SPEECH_TEXT_LIMIT;
+    const label = busy ? '正在提交…' : pending ? '核对上次提交' : blocked ? '原任务处理中' : asset ? '再次生成语音' : '生成语音（可能收费）';
+    const status = job ? `${speechLabels[job.state] || job.state} · ${job.message || ''}` : '尚未提交语音任务';
+    return { config, job, asset, connection, estimate, pending, disabled, label, status };
+  }
+  function speechMarkup(node) {
+    const { config, job, asset, connection, estimate, disabled, label, status } = speechData(node);
+    const models = state().speechCatalog?.length ? state().speechCatalog : SPEECH_MODELS;
+    const choices = config.model && !models.includes(config.model) ? [config.model, ...models] : models;
+    const voices = state().speechVoices || [];
+    return `<div class="canvas-cover canvas-simple-cover speech-cover">${defaultCoverMarkup('audio', '语音生成')}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div></div>
+      <div class="canvas-hover-details" aria-label="${escapeHtml(node.label)}详情">${detailHeading(node, '语音创作', node.label)}<div class="canvas-details-content speech-details canvas-composer">
+      <label class="speech-card-prompt"><span class="canvas-prompt-label">配音文案</span><textarea data-speech-field="text" aria-label="配音文案" rows="4" maxlength="${SPEECH_TEXT_LIMIT}" placeholder="输入旁白、对白或需要朗读的文字…">${escapeHtml(config.text)}</textarea></label>
+      <div class="canvas-composer-toolbar"><div class="canvas-composer-controls speech-card-model-voice"><label><span class="canvas-option-label">语音模型</span><select data-speech-field="model" aria-label="语音模型" title="语音模型">${choices.map(model => option(model, model, config.model)).join('')}</select></label><label><span class="canvas-option-label">音色</span><input data-speech-field="voiceId" aria-label="音色 ID" title="音色 ID" maxlength="256" value="${escapeHtml(config.voiceId)}" placeholder="填写音色 ID"></label></div><div class="speech-card-meta canvas-composer-cost"><span class="speech-card-cost">${estimate ? `预计 ¥${estimate.amount.toFixed(4)}` : '价格以平台为准'}</span></div><button type="button" class="primary speech-card-generate canvas-composer-submit" data-card-action="speech-generate" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"${disabled ? ' disabled' : ''}>${escapeHtml(label)}</button></div>
+      <div class="speech-card-count">${speechCharacterCount(config.text)} / ${SPEECH_TEXT_LIMIT} 字符</div>
+      ${!connection ? '<button type="button" class="text-button speech-card-connect" data-card-action="speech-connections">连接语音模型 ↗</button>' : ''}
+      <details class="speech-card-options canvas-composer-more"><summary>更多设置</summary><div class="speech-card-voice-actions"><button type="button" class="button" data-card-action="speech-voices">读取账户音色</button>${voices.length ? `<select data-speech-voice-select aria-label="选择账户音色"><option value="">选择音色</option>${voices.map(voice => option(voice.id, voice.name || voice.id, config.voiceId)).join('')}</select>` : ''}</div><div class="speech-card-fields"><label>音频格式<select data-speech-field="format">${option('mp3', 'MP3', config.format)}${option('wav', 'WAV', config.format)}</select></label><label>情绪<select data-speech-field="emotion">${SPEECH_EMOTIONS.map(([id, name]) => `<option value="${escapeHtml(id)}"${id === config.emotion ? ' selected' : ''}${speechEmotionSupported(config.model, id) ? '' : ' disabled'}>${escapeHtml(name)}</option>`).join('')}</select></label><label>语速<input type="number" data-speech-field="speed" min="0.5" max="2" step="0.05" value="${escapeHtml(config.speed)}"></label><label>音量<input type="number" data-speech-field="vol" min="0.01" max="10" step="0.01" value="${escapeHtml(config.vol)}"></label><label>音调<input type="number" data-speech-field="pitch" min="-12" max="12" step="1" value="${escapeHtml(config.pitch)}"></label><label>文件名<input data-speech-field="name" maxlength="120" value="${escapeHtml(config.name)}" placeholder="可留空"></label></div></details>
+      <div class="speech-card-status" role="status" aria-live="polite"${job ? '' : ' hidden'}>${escapeHtml(status)}</div>
+      ${job?.state === 'save_pending' ? '<button type="button" class="button full" data-card-action="speech-save">重试保存已有音频</button>' : ''}
+      ${job?.state === 'uncertain' ? '<button type="button" class="text-button" data-card-action="speech-open-page">核对这次任务 ↗</button>' : ''}
+      ${asset ? `<div class="speech-card-result"><audio controls preload="none" src="/api/assets/${encodeURIComponent(asset.id)}" aria-label="试听${escapeHtml(asset.name)}"></audio><a class="button" href="/api/assets/${encodeURIComponent(asset.id)}?download=1" download>下载音频 ↓</a></div>` : ''}
+      <button type="button" class="text-button speech-card-refresh" data-card-action="speech-refresh"${job ? '' : ' hidden'}>刷新任务状态</button>
+      </div></div>`;
+  }
+
+  function refreshSpeechControls(card, node) {
+    const data = speechData(node);
+    const button = card.querySelector('.speech-card-generate');
+    if (button) { button.disabled = data.disabled; button.textContent = data.label; button.setAttribute('aria-label',data.label); button.setAttribute('title',data.label); }
+    const count = card.querySelector('.speech-card-count');
+    if (count) count.textContent = `${speechCharacterCount(data.config.text)} / ${SPEECH_TEXT_LIMIT} 字符`;
+    const cost = card.querySelector('.speech-card-cost');
+    if (cost) cost.textContent = data.estimate ? `预计 ¥${data.estimate.amount.toFixed(4)}` : '价格以平台为准';
+    const status = card.querySelector('.speech-card-status');
+    if (status) { status.textContent = data.status; status.hidden = !data.job; }
+    const refresh = card.querySelector('.speech-card-refresh'); if (refresh) refresh.hidden = !data.job;
+  }
   function cardMarkup(node) {
     const scene = project().scenes.find(scene => scene.id === node.sceneId), descriptor = info[node.kind];
-    const title = node.kind === 'compose' ? '生成结果' : scene?.title || node.label;
+    const title = scene?.title || node.label;
     const asset = project().assets.find(item => !item.deletedAt && item.id === node.assetId);
-    const hasVideo = scene ? Boolean(shotData(scene, node).preview) : asset?.kind === 'video';
+    const mediaCover = Boolean(isImageGenerationNode(node) || isSpeechGenerationNode(node) || scene || asset && ['image', 'video'].includes(asset.kind));
     let body;
     if (isImageGenerationNode(node)) body = imageMarkup(node);
+    else if (isSpeechGenerationNode(node)) body = speechMarkup(node);
     else if (scene) body = shotMarkup(scene, node);
     else if (node.assetId || node.assetName) body = assetMarkup(node);
     else if (node.kind === 'ai') body = aiMarkup(node);
-    else if (node.kind === 'text') body = `<textarea class="canvas-note" data-node-field="note" aria-label="${escapeHtml(node.label)}内容" placeholder="写下想法、画面描述或视频提示词…">${escapeHtml(node.note)}</textarea><div class="canvas-node-footer"><span>文字便签</span><button data-card-action="from-text-ai">创建 AI 卡</button><button data-card-action="from-text-image">创建生图 ↗</button><button data-card-action="from-text">创建视频 ↗</button></div>`;
+    else if (node.kind === 'text') body = `<textarea class="canvas-note" data-node-field="note" aria-label="${escapeHtml(node.label)}内容" placeholder="写下想法、画面描述或视频提示词…">${escapeHtml(node.note)}</textarea><div class="canvas-node-footer"><span>文字便签</span><button data-card-action="from-text-ai">创建 AI 卡</button><button data-card-action="from-text-image">创建生图 ↗</button><button data-card-action="from-text">创建视频 ↗</button><button data-card-action="from-text-speech">生成配音 ♫</button></div>`;
     else body = `<div class="canvas-guide"><p>${escapeHtml(node.kind === 'compose' ? descriptor[1] : node.note || descriptor[1])}</p><span class="canvas-guide-icon">${descriptor[0]}</span></div><div class="canvas-node-footer"><span>${{ pending: '待制作', draft: '本地草案', ready: '已就绪', uploaded: '已上传', done: '已有成品', failed: '需检查' }[node.status] || '待制作'}</span><button data-card-action="guide">${descriptor[2]} ↗</button></div>`;
-    return `<header class="canvas-node-header" title="拖动标题栏移动卡片；双击标题修改名称"><span class="canvas-node-icon">${isImageGenerationNode(node) ? '✦' : descriptor[0]}</span><input class="canvas-node-title" data-node-field="label" aria-label="${escapeHtml(title)}标题" value="${escapeHtml(title)}" maxlength="80" readonly>${hasVideo ? '<button class="canvas-cover-play" data-card-action="play-cover" aria-label="播放视频" title="播放或暂停视频">播放</button>' : ''}<button class="canvas-node-menu" data-card-action="remove" aria-label="移除${escapeHtml(title)}卡片" title="移除卡片，保留视频生成项和素材">×</button></header>
-      <div class="canvas-node-body">${body}</div>
+    if (!mediaCover) {
+      body = `<div class="canvas-cover canvas-simple-cover">${defaultCoverMarkup(node.kind, title)}<div class="canvas-cover-drag" data-cover-drag aria-hidden="true"></div></div><div class="canvas-hover-details" aria-label="${escapeHtml(title)}详情">${detailHeading(node, node.kind === 'text' ? '文字便签' : node.kind === 'ai' ? 'AI 创作' : node.kind === 'audio' ? '声音素材' : '创作卡片', title)}<div class="canvas-details-content">${body}</div></div>`;
+    }
+    return `<div class="canvas-node-body">${body}</div>
       ${state().kinds[node.kind]?.accepts.length ? `<button class="canvas-port input" data-port="input" aria-label="${escapeHtml(title)}输入端口" title="左侧中点：靠近自动吸附，松开连接"></button>` : ''}
       <button class="canvas-port output" data-port="output" aria-label="${escapeHtml(title)}输出端口" title="${scene ? '将当前预览视频作为参考，拖到另一个视频卡片' : '从右侧中点拖出连线，靠近目标卡片自动吸附；也可点击后选择左端口'}"></button>
       <button class="canvas-node-resize" aria-label="调整${escapeHtml(title)}卡片大小" title="拖动调整大小"></button>`;
@@ -822,47 +895,28 @@ export function createInfiniteCanvas(bridge) {
     const content = panel.querySelector('.canvas-details-content'), scrollTop = content?.scrollTop || 0;
     const zoom = Number(graph().viewport.zoom) || 1;
     const rect = card.getBoundingClientRect(), bounds = viewport.getBoundingClientRect();
-    const gap = 12, margin = 12;
-    const narrow = viewport.clientWidth < 700;
-    const compactTools = narrow || window.matchMedia?.('(max-width: 920px)')?.matches;
+    const gap = 14, margin = 14;
     const viewportWidth = Math.max(0, viewport.clientWidth || bounds.width || 0);
     const assetDetails = Boolean(panel.querySelector('.canvas-reference-hint'));
     panel.classList.toggle('asset-details-panel', assetDetails);
-    const desiredWidth = Math.min(assetDetails ? 320 : 360, Math.max(0, viewportWidth - margin * 2));
-    const safeTop = bounds.top + margin;
-    const safeBottom = Math.max(safeTop, bounds.bottom - (compactTools ? 132 : 84));
-    // The details stay beside the hovered card. Prefer the right side, then the left;
-    // if neither side has the full width, shrink into the room that is actually available
-    // so the panel still touches the card instead of jumping to a distant canvas corner.
-    const right = rect.right + gap;
-    const rightSpace = Math.max(0, bounds.right - margin - right);
-    const leftSpace = Math.max(0, rect.left - gap - (bounds.left + margin));
-    let width = desiredWidth, x;
-    if (rightSpace >= desiredWidth) {
-      x = right;
-    } else if (leftSpace >= desiredWidth) {
-      x = rect.left - gap - width;
-    } else if (rightSpace >= leftSpace && rightSpace > 0) {
-      width = rightSpace; x = right;
-    } else if (leftSpace > 0) {
-      width = leftSpace; x = rect.left - gap - width;
-    } else {
-      x = Math.min(bounds.right - margin - width, Math.max(bounds.left + margin, rect.left));
-    }
-    // Keep the panel's top aligned with the card whenever possible. If the card is
-    // close to the bottom toolbar, move the panel upward so its scroll area remains usable.
-    const measuredHeight = content?.scrollHeight || panel.offsetHeight || 560;
-    const panelHeight = Math.min(560, Math.max(0, measuredHeight));
-    const maxTop = Math.max(safeTop, safeBottom - panelHeight - gap);
-    const y = Math.min(maxTop, Math.max(safeTop, rect.top));
-    const height = Math.max(0, Math.min(560, safeBottom - y - gap));
+    const width = Math.min(assetDetails ? 420 : 560, Math.max(0, viewportWidth - margin * 2));
+    const minX = bounds.left + margin, maxX = Math.max(minX, bounds.right - margin - width);
+    const x = clamp(rect.left + rect.width / 2 - width / 2, minX, maxX);
+    const safeTop = bounds.top + margin, safeBottom = Math.max(safeTop, bounds.bottom - 68);
+    const below = rect.bottom + gap, aboveSpace = Math.max(0, rect.top - gap - safeTop);
+    const belowSpace = Math.max(0, safeBottom - below);
+    const desiredHeight = Math.min(500, Math.max(0, (content?.scrollHeight || panel.offsetHeight || 360) + 47));
+    const showBelow = belowSpace >= desiredHeight || belowSpace >= aboveSpace;
+    const height = Math.max(0, Math.min(desiredHeight, showBelow ? belowSpace : aboveSpace));
+    const y = showBelow ? below : rect.top - gap - height;
     card.style.setProperty('--details-scale', `${1 / zoom}`);
     card.style.setProperty('--details-width', `${width}px`);
     card.style.setProperty('--details-max-height', `${height}px`);
     card.style.setProperty('--details-left', `${(x - rect.left) / zoom}px`);
     card.style.setProperty('--details-top', `${(y - rect.top) / zoom}px`);
-    card.classList.toggle('details-left', x + width <= rect.left);
-    card.classList.remove('details-below', 'details-above');
+    card.classList.toggle('details-below', showBelow);
+    card.classList.toggle('details-above', !showBelow);
+    card.classList.remove('details-left');
     if (content) content.scrollTop = scrollTop;
   }
   function syncCoverPlayback(card) {
@@ -895,11 +949,11 @@ export function createInfiniteCanvas(bridge) {
       references.outerHTML = markup; referenceSignatures.set(card, markup);
     }
     const { p, submitting, disabled, label, estimate, hint } = shotData(scene, node);
-    const button = card.querySelector('.shot-generate'); if (button) { button.disabled = disabled; button.textContent = label; }
+    const button = card.querySelector('.shot-generate'); if (button) { button.disabled = disabled; button.textContent = label; button.setAttribute('aria-label',label); button.setAttribute('title',label); }
     const cost = card.querySelector('.shot-estimate strong'); if (cost) cost.textContent = estimate;
     const specifications = card.querySelector('.shot-estimate small');
     if (specifications) specifications.textContent = `${p.model?.name || '选择视频模型后显示接口参数'} · ${p.ratio || '模型默认比例'} · ${p.resolution || '模型默认画质'} · ${videoPricingNote(p)}`;
-    const note = card.querySelector('.shot-hint'); if (note) note.textContent = hint;
+    const note = card.querySelector('.shot-hint'); if (note) { note.textContent = hint; note.hidden = !disabled && !shotData(scene, node).active; }
     const controls = videoParameterControls(p, state().catalog || [], state().settings.generationCountMax || 5, submitting, scene.videoModel || state().settings.videoModel);
     for (const [field, config] of Object.entries(controls)) {
       const control = card.querySelector(`[data-shot-field="${field}"]`);
@@ -924,14 +978,14 @@ export function createInfiniteCanvas(bridge) {
     graph().groups = (graph().groups || []).map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => valid.has(id)) })).filter(group => group.nodeIds.length > 1);
     if (!valid.has(connectionFrom)) connectionFrom = '';
     if (!graph().links.some(link => link.id === selectedLink)) selectedLink = '';
-    for (const [id, card] of cards) if (!valid.has(id)) { card.remove(); cards.delete(id); signatures.delete(id); }
+    for (const [id, card] of cards) if (!valid.has(id)) { if (activeCoverCard === card) closeCoverDetails(); card.remove(); cards.delete(id); signatures.delete(id); }
     for (const node of graph().nodes) {
       let card = cards.get(node.id);
       if (!card) { card = document.createElement('article'); card.dataset.nodeId = node.id; card.tabIndex = 0;
         card.setAttribute('aria-label', `${node.kind === 'compose' ? '生成结果' : node.label}卡片`); cards.set(node.id, card); nodesLayer.append(card); }
       const scene = project().scenes.find(scene => scene.id === node.sceneId);
-      const cover = Boolean(isImageGenerationNode(node) || scene || ['image', 'video'].includes(node.kind) && (node.assetId || node.assetName));
-      card.className = `canvas-node${cover ? ' cover-card' : ''} node-kind-${node.kind}${node.kind === 'text' ? ' text-card' : ''}${isImageGenerationNode(node) ? ' image-generation-card' : scene ? ' shot-card' : node.assetId || node.assetName ? ' asset-card' : ' guide-card'}${selection.has(node.id) ? ' selected' : ''}${activeCoverCard === card ? ' details-open' : ''}`;
+      card.className = `canvas-node cover-card node-kind-${node.kind}${node.kind === 'text' ? ' text-card' : ''}${isImageGenerationNode(node) ? ' image-generation-card' : scene ? ' shot-card' : node.assetId || node.assetName ? ' asset-card' : ' guide-card'}${selection.has(node.id) ? ' selected' : ''}${activeCoverCard === card ? ' details-open' : ''}`;
+      card.setAttribute('aria-expanded', String(activeCoverCard === card));
       Object.assign(card.style, { left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px`, height: `${node.height}px` });
       const template = cardMarkup(node);
       const locked = interaction || card.contains(document.activeElement) && document.activeElement !== card || playing(card);
@@ -946,6 +1000,7 @@ export function createInfiniteCanvas(bridge) {
       }
       if (scene) refreshShotControls(card, scene, node);
       if (isImageGenerationNode(node)) refreshImageControls(card,node);
+      if (isSpeechGenerationNode(node)) refreshSpeechControls(card,node);
       primeVideoCover(card.querySelector('[data-cover-video]')); syncCoverPlayback(card); positionCoverDetails(card);
       if (detailsScroll !== null) { const details = card.querySelector('.canvas-details-content'); if (details) details.scrollTop = detailsScroll; }
       card.querySelector('.canvas-port.output')?.classList.toggle('connecting', connectionFrom === node.id);
@@ -1096,7 +1151,7 @@ export function createInfiniteCanvas(bridge) {
     if (assetsPanel.hidden || !project()) return;
     const filter = graph().nodes.find(node => node.id === relinkNodeId)?.kind;
     const assets = [...project().assets].reverse().filter(asset => !asset.deletedAt && (!filter || asset.kind === filter));
-    $('#canvas-asset-picker').innerHTML = assets.length ? assets.map(asset => `<button class="canvas-asset-item" data-canvas-asset="${escapeHtml(asset.id)}" draggable="true" title="点击或拖到画布：${escapeHtml(asset.name)}"><span class="canvas-asset-thumb">${asset.kind === 'image' ? `<img src="/api/assets/${encodeURIComponent(asset.id)}" loading="lazy" alt="" draggable="false">` : info[asset.kind][0]}</span><span class="canvas-asset-label"><strong>${escapeHtml(asset.name)}</strong><small>${{ image: '图片', video: '视频', audio: '声音' }[asset.kind]} · 拖放到画布</small></span><span>＋</span></button>`).join('') : '<p class="canvas-panel-empty">上传图片、视频或声音，然后放到画布上。</p>';
+    $('#canvas-asset-picker').innerHTML = assets.length ? assets.map(asset => `<button class="canvas-asset-item" data-canvas-asset="${escapeHtml(asset.id)}" draggable="true" title="点击或拖到画布：${escapeHtml(asset.name)}"><span class="canvas-asset-thumb">${['image', 'video'].includes(asset.kind) ? `<img src="${assetThumbnailUrl(asset.id)}" loading="lazy" alt="" draggable="false">` : info[asset.kind][0]}</span><span class="canvas-asset-label"><strong>${escapeHtml(asset.name)}</strong><small>${{ image: '图片', video: '视频', audio: '声音' }[asset.kind]} · 拖放到画布</small></span><span>＋</span></button>`).join('') : '<p class="canvas-panel-empty">上传图片、视频或声音，然后放到画布上。</p>';
   }
   function openAssets(point = null, nodeId = '') {
     assetsPanel.hidden = false; briefPanel.hidden = true; relinkNodeId = nodeId; panelPoint = point;
@@ -1183,6 +1238,7 @@ export function createInfiniteCanvas(bridge) {
     contextMenu.hidden = true;
     suppressContextMenuUntil = 0;
     const point = localPoint(event), card = event.target.closest('.canvas-node');
+    if (event.button === 0 && !card) closeCoverDetails();
     const rightButton = event.button === 2;
     if (rightButton) {
       // A short right-click keeps the existing context-menu behavior. A
@@ -1249,6 +1305,7 @@ export function createInfiniteCanvas(bridge) {
     if (!hand && card) {
       const id = card.dataset.nodeId, node = graph().nodes.find(node => node.id === id);
       if (!node) return;
+      if (!card.classList.contains('cover-card')) closeCoverDetails();
       if (event.shiftKey && !interactive(event.target)) {
         if (selection.has(id)) selection.delete(id); else selection.add(id);
       } else if (!selection.has(id)) {
@@ -1257,10 +1314,10 @@ export function createInfiniteCanvas(bridge) {
       }
       selectedLink = ''; updateTools();
       const resize = event.target.closest('.canvas-node-resize');
-      const header = event.target.closest('.canvas-node-header'), cover = event.target.closest('[data-cover-drag]');
+      const cover = event.target.closest('[data-cover-drag]');
       if (resize) {
         finishEditing(); interaction = { mode: 'resize', id, pointerId: event.pointerId, start: point, width: node.width, height: node.height, before: snapshot(), moved: false };
-      } else if ((header || cover) && !interactive(event.target) && selection.has(id)) {
+      } else if (cover && !interactive(event.target) && selection.has(id)) {
         finishEditing(); interaction = { mode: 'move', id, pointerType: event.pointerType, pointerId: event.pointerId, start: point, before: snapshot(), moved: false,
           positions: graph().nodes.filter(item => selection.has(item.id)).map(item => ({ id: item.id, x: item.x, y: item.y })) };
       } else return;
@@ -1383,10 +1440,6 @@ export function createInfiniteCanvas(bridge) {
     if (!project() || editing(event.target) || event.target.closest('video,audio')) return;
     event.preventDefault(); openContextMenu(event);
   });
-  nodesLayer.addEventListener('dblclick', event => {
-    const header = event.target.closest('.canvas-node-header'); if (!header || event.target.closest('button') || !project()) return;
-    const input = header.querySelector('[data-node-field="label"]'); input.readOnly = false; input.focus(); input.select();
-  });
   groupsLayer.addEventListener('click', event => {
     const button = event.target.closest('[data-group-action="dissolve"]');
     if (button) { event.preventDefault(); dissolveGroup(button.dataset.groupId); }
@@ -1415,19 +1468,14 @@ export function createInfiniteCanvas(bridge) {
     group.label = event.target.value.slice(0, 80); bridge.mark('graph');
   });
   nodesLayer.addEventListener('focusin', event => {
-    const card = event.target.closest('.canvas-node');
     focusedReference = referenceAtElement(event.target); updateLinkFocus();
-    if (card?.classList.contains('cover-card')) showCoverDetails(card);
-    else if (card) positionCoverDetails(card);
-    if ((event.target.dataset.imageField || event.target.dataset.aiField || event.target.dataset.nodeField && !event.target.readOnly) && !editBefore) editBefore = snapshot();
+    if ((event.target.dataset.imageField || event.target.dataset.aiField || event.target.dataset.speechField || event.target.dataset.nodeField && !event.target.readOnly) && !editBefore) editBefore = snapshot();
   });
   nodesLayer.addEventListener('focusout', event => {
-    if (event.target.dataset.nodeField === 'label') event.target.readOnly = true;
     finishEditing(); const card = event.target.closest('.canvas-node'), next = event.relatedTarget;
     queueMicrotask(() => {
       focusedReference = referenceAtElement(document.activeElement); updateLinkFocus();
       settleCoverControls(card);
-      if (card?.classList.contains('cover-card') && !card.contains(next)) scheduleCoverDetailsHide(card);
       if (!card?.contains(next)) render();
     });
   });
@@ -1449,7 +1497,25 @@ export function createInfiniteCanvas(bridge) {
     if (event.target.dataset.shotField) updateSceneField(event.target, card, node);
     if (event.target.dataset.imageField) updateImageField(event.target,card,node);
     if (event.target.dataset.aiField) updateAiField(event.target, node);
+    if (event.target.dataset.speechField) updateSpeechField(event.target,card,node);
   });
+  function updateSpeechField(control, card, node) {
+    const field = control.dataset.speechField;
+    if (!isSpeechGenerationNode(node) || !['model','text','voiceId','name','speed','vol','pitch','emotion','format'].includes(field)) return;
+    if (!editBefore) editBefore = snapshot();
+    const value = ['speed','vol','pitch'].includes(field) ? control.value === '' ? '' : Number(control.value) : control.value;
+    const next = { ...node.speechConfig, [field]: value };
+    if (field === 'model' && !speechEmotionSupported(next.model, next.emotion)) next.emotion = '';
+    node.speechConfig = normalizeSpeechDraft(next);
+    bridge.mark('graph'); refreshSpeechControls(card,node);
+    if (field === 'model') {
+      const emotion = card.querySelector('[data-speech-field="emotion"]');
+      if (emotion) {
+        for (const choice of emotion.options) choice.disabled = !speechEmotionSupported(next.model, choice.value);
+        emotion.value = node.speechConfig.emotion;
+      }
+    }
+  }
   function updateImageField(control,card,node) {
     const field=control.dataset.imageField;
     if (!isImageGenerationNode(node) || !['model','ratio','quality','style','count','prompt'].includes(field)) return;
@@ -1509,22 +1575,18 @@ export function createInfiniteCanvas(bridge) {
       updateAiField(event.target, node); finishEditing();
       if (event.target.tagName === 'SELECT') render({ forceId: node.id });
     }
+    if (event.target.dataset.speechField) { updateSpeechField(event.target, card, node); finishEditing(); }
+    if (event.target.matches('[data-speech-voice-select]') && event.target.value && isSpeechGenerationNode(node)) {
+      const input = card.querySelector('[data-speech-field="voiceId"]');
+      if (input) { input.value = event.target.value; updateSpeechField(input,card,node); finishEditing(); }
+    }
     if (event.target.matches('[data-preview-candidate]')) { card.dataset.previewAsset = event.target.value; render({ forceId: node.id }); }
   });
   nodesLayer.addEventListener('pointerover', event => {
     hoveredReference = referenceAtElement(event.target); updateLinkFocus();
-    const card = event.target.closest('.cover-card');
-    if (card && !card.contains(event.relatedTarget)) {
-      coverEntries.set(card, { x: event.clientX, y: event.clientY });
-      showCoverDetails(card);
-    }
   });
   nodesLayer.addEventListener('pointerout', event => {
     hoveredReference = referenceAtElement(event.relatedTarget); updateLinkFocus();
-    const card = event.target.closest('.cover-card');
-    if (card && !card.contains(event.relatedTarget)) {
-      coverEntries.delete(card); settleCoverControls(card); scheduleCoverDetailsHide(card);
-    }
   });
   nodesLayer.addEventListener('loadedmetadata', event => primeVideoCover(event.target), true);
   for (const name of ['play', 'pause', 'ended']) nodesLayer.addEventListener(name, event => {
@@ -1535,10 +1597,7 @@ export function createInfiniteCanvas(bridge) {
     }
     if (name !== 'play') queueMicrotask(() => {
       settleCoverControls(card);
-      if (card?.classList.contains('cover-card') && !card.matches?.(':hover,:focus-within')) {
-        clearCoverHideTimer();
-        if (activeCoverCard === card) { card.classList.remove('details-open'); activeCoverCard = null; }
-      }
+      if (card?.classList.contains('cover-card') && activeCoverCard === card) settleCoverControls(card);
       render();
     });
   }, true);
@@ -1553,12 +1612,24 @@ export function createInfiniteCanvas(bridge) {
       else bridge.toast('先点击来源卡片的右端口，再点击目标的左端口。');
       return;
     }
-    const button = event.target.closest('[data-card-action]'); if (!button || button.disabled) return;
+    const button = event.target.closest('[data-card-action]');
+    if (!button) {
+      if (card.classList.contains('cover-card') && !event.target.closest('.canvas-hover-details') && !interactive(event.target)
+        && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        if (activeCoverCard === card) closeCoverDetails(); else showCoverDetails(card);
+      }
+      return;
+    }
+    if (button.disabled) return;
     const operation = button.dataset.cardAction, scene = project().scenes.find(scene => scene.id === node.sceneId);
+    if (operation === 'close-details') { closeCoverDetails(); card.focus({ preventScroll: true }); return; }
     try {
       if (operation === 'play-cover') {
         const video = card.querySelector('[data-cover-video]'); if (!video) return;
-        if (video.paused || video.ended) { video.controls = true; syncCoverPlayback(card); await video.play(); }
+        if (video.paused || video.ended) {
+          if (!video.getAttribute('src') && video.dataset.mediaSrc) video.src = video.dataset.mediaSrc;
+          video.controls = true; syncCoverPlayback(card); await video.play();
+        }
         else video.pause();
         syncCoverPlayback(card);
       }
@@ -1569,11 +1640,37 @@ export function createInfiniteCanvas(bridge) {
       if (operation === 'from-text-ai') addAi(null, node);
       if (operation === 'from-text') addShot(null, node);
       if (operation === 'from-text-image') addImage(null,node);
+      if (operation === 'from-text-speech') addSpeech(null, node);
       if (operation === 'ai-manage-skills') { bridge.openSkills?.(); return; }
       if (operation === 'ai-run') { finishEditing(); await bridge.runAiNode(node.id); render({ forceId: node.id }); }
       if (operation === 'ai-create-text') addText(null, normalizeAiConfig(node.aiConfig).output);
       if (operation === 'ai-create-image') addImage(null, node);
       if (operation === 'ai-create-video') addShot(null, node);
+      if (operation === 'ai-create-speech') addSpeech(null, node);
+      if (operation === 'speech-connections') { bridge.openSpeechConnections?.(); return; }
+      if (operation === 'speech-open-page') { bridge.openSpeech?.(node.speechConfig?.text || '', { nodeId: node.id }); return; }
+      if (operation === 'speech-voices') {
+        try { await bridge.loadSpeechVoices?.(node.speechConfig?.model); render({ forceId: node.id }); }
+        catch (error) { report(error); }
+        return;
+      }
+      if (operation === 'speech-refresh') { try { await bridge.refreshSpeechJobs?.(); render({ forceId: node.id }); } catch (error) { report(error); } return; }
+      if (operation === 'speech-save') {
+        const job = (state().speechJobs || []).find(item => item.nodeId === node.id && item.state === 'save_pending');
+        if (!job) return;
+        try { button.disabled = true; await bridge.api(`/api/speech-jobs/${job.id}/save`, 'POST', {}); await bridge.refreshSpeechJobs?.(); render({ forceId: node.id }); }
+        catch (error) { report(error); }
+        finally { if (button.isConnected) button.disabled = false; }
+        return;
+      }
+      if (operation === 'speech-generate') {
+        if (speechSubmitting.has(node.id)) return;
+        speechSubmitting.add(node.id); refreshSpeechControls(card,node);
+        try { finishEditing(); await bridge.submitSpeechCard?.(node.id, normalizeSpeechDraft(node.speechConfig)); await bridge.refreshSpeechJobs?.(); render({ forceId: node.id }); }
+        catch (error) { report(error); }
+        finally { speechSubmitting.delete(node.id); refreshSpeechControls(card,node); }
+        return;
+      }
       if (operation === 'ai-create-scenes') addAiScenes(node);
       if (operation === 'image-generate') {finishEditing();await bridge.generateImageCard(node.id);render();}
       if (operation === 'image-refresh') {await bridge.refreshImageJobs();render();}
@@ -1597,7 +1694,12 @@ export function createInfiniteCanvas(bridge) {
       if (operation === 'details') bridge.setView('videos');
       if (operation === 'guide') {
         if (node.kind === 'brief') openBrief();
-        else if (['image', 'audio'].includes(node.kind)) openAssets(null, node.id);
+        else if (node.kind === 'audio') {
+          const incoming = graph().links.filter(link => link.to === node.id).map(link => graph().nodes.find(source => source.id === link.from));
+          const text = incoming.map(source => source?.kind === 'ai' ? normalizeAiConfig(source.aiConfig).output : source?.note || '').filter(value => value.trim()).join('\n\n');
+          bridge.openSpeech?.(text || node.note || '', { nodeId: node.id });
+        }
+        else if (node.kind === 'image') openAssets(null, node.id);
         else if (node.kind === 'video') {
           const unplaced = project().scenes.find(item => !graph().nodes.some(card => card.sceneId === item.id));
           if (unplaced) changeGraph(() => { node.sceneId = unplaced.id; node.label = unplaced.title; node.width = CARD_WIDTH; node.height = CARD_HEIGHT; });
@@ -1675,6 +1777,7 @@ export function createInfiniteCanvas(bridge) {
       if (add.dataset.canvasAdd === 'ai') addAi(point);
       if (add.dataset.canvasAdd === 'shot') addShot(point);
       if (add.dataset.canvasAdd === 'image') addImage(point);
+      if (add.dataset.canvasAdd === 'speech') addSpeech(point);
       if (add.dataset.canvasAdd === 'assets') openAssets(point);
     }
     const toolButton = event.target.closest('[data-canvas-tool]');
@@ -1732,6 +1835,9 @@ export function createInfiniteCanvas(bridge) {
   });
   document.addEventListener('keydown', event => {
     if (!project() || !visible() || $('dialog[open]')) return;
+    if (event.key === 'Escape' && activeCoverCard && !interaction && !connectionFrom && contextMenu.hidden) {
+      event.preventDefault(); closeCoverDetails(); viewport.focus({ preventScroll: true }); return;
+    }
     if (event.key === 'Escape' && root.classList.contains('canvas-expanded') && !interaction && !connectionFrom && contextMenu.hidden && !event.target.closest('.reference-mention-menu')) {
       event.preventDefault();
       setExpanded(false);
@@ -1765,8 +1871,9 @@ export function createInfiniteCanvas(bridge) {
     if (!modified && event.key === '-') { event.preventDefault(); zoom(1 / 1.2); }
     if (event.key === 'F2' && selection.size === 1) {
       event.preventDefault(); const card = cards.get([...selection][0]); card?.focus({ preventScroll: true });
+      showCoverDetails(card);
       const input = card?.querySelector('[data-node-field="label"]');
-      if (input) { input.readOnly = false; input.focus(); input.select(); }
+      if (input) { input.focus(); input.select(); }
     }
   });
   document.addEventListener('keyup', event => { if (event.key === ' ') { spaceDown = false; updateTools(); } });
@@ -1860,7 +1967,7 @@ export function createInfiniteCanvas(bridge) {
     $('#expand-canvas').setAttribute('aria-pressed', String(isExpanded));
     $('#expand-canvas').textContent = isExpanded ? '收起 ↙' : '展开 ↗';
     $('#expand-canvas').title = isExpanded ? '收起画布（Esc）' : '全屏画布';
-    setChatOpen(false);
+    setChatOpen(isExpanded);
     requestAnimationFrame(() => { if (project()) applyViewport(); });
   }
   $('#toggle-canvas-text').onclick = () => setChatOpen(!root.classList.contains('canvas-chat-open'));
@@ -1881,7 +1988,7 @@ export function createInfiniteCanvas(bridge) {
   $('#zoom-in').onclick = () => zoom(1.2); $('#zoom-out').onclick = () => zoom(1 / 1.2);
   $('#zoom-level').onclick = () => setViewport(zoomAt(graph().viewport, 1, { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 }));
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { if (project() && visible()) applyViewport(); }).observe(viewport);
-  return { render, reset, fit, activate: () => requestAnimationFrame(() => render()), finishEditing, syncScenes, addAsset, addAi, addAiScenes, addImage, addShot,
+  return { render, reset, fit, activate: () => requestAnimationFrame(() => render()), finishEditing, syncScenes, addAsset, addAi, addAiScenes, addImage, addShot, addSpeech,
     addPromptImage: prompt => addPromptDraft('image', prompt), addPromptVideo: prompt => addPromptDraft('video', prompt),
     setExpanded, openBrief,
     busy: () => Boolean(interaction || (nodesLayer.contains(document.activeElement) || groupsLayer.contains(document.activeElement)) && editing(document.activeElement) || playing(nodesLayer)) };

@@ -19,6 +19,13 @@ $taskCopies = @(
     @{ From = 'package.json'; To = 'package.json' },
     @{ From = 'LICENSE'; To = 'LICENSE' },
     @{ From = 'THIRD_PARTY_NOTICES.md'; To = 'THIRD_PARTY_NOTICES.md' },
+    @{ From = 'tools\blender-previs.py'; To = 'tools\blender-previs.py' },
+    @{ From = 'tools\blender-helper.mjs'; To = 'tools\blender-helper.mjs' },
+    @{ From = 'tools\blender-helper\start.cmd'; To = 'tools\blender-helper\start.cmd' },
+    @{ From = 'tools\blender-helper\install.ps1'; To = 'tools\blender-helper\install.ps1' },
+    @{ From = 'tools\blender-helper\setup.cmd'; To = 'tools\blender-helper\setup.cmd' },
+    @{ From = 'tools\blender-helper\setup.ps1'; To = 'tools\blender-helper\setup.ps1' },
+    @{ From = 'docs\Blender预演工作流.md'; To = 'docs\Blender预演工作流.md' },
     @{ From = 'tools\share\install.cmd'; To = '安装镜策.cmd' },
     @{ From = 'tools\share\start.cmd'; To = '启动工作台.cmd' },
     @{ From = 'tools\share\stop.cmd'; To = '停止工作台.cmd' },
@@ -27,7 +34,7 @@ $taskCopies = @(
     @{ From = 'tools\share\start-studio.mjs'; To = 'tools\share\start-studio.mjs' },
     @{ From = 'tools\share\stop-studio.mjs'; To = 'tools\share\stop-studio.mjs' }
 )
-foreach ($taskSourceGroup in @(@{ Directory = 'lib'; Extensions = @('.mjs') }, @{ Directory = 'public'; Extensions = @('.html', '.js', '.css') })) {
+foreach ($taskSourceGroup in @(@{ Directory = 'lib'; Extensions = @('.mjs') }, @{ Directory = 'public'; Extensions = @('.html', '.js', '.css', '.png') })) {
     $taskDirectory = Get-Item -LiteralPath (Join-Path $taskRoot $taskSourceGroup.Directory)
     if ($taskDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '程序源目录不能是链接。' }
     foreach ($taskItem in Get-ChildItem -LiteralPath $taskDirectory.FullName -Force) {

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import { createSkillLibrary } from '../public/skills.js';
+import { createPrevisWorkflow } from '../public/previs.js';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -198,7 +199,8 @@ test('页面脚本：数量改变更新总价，预览卡片可显式选片并�
       querySelector() { return element(selector + ' child'); }, insertAdjacentHTML(_position, html) { this.innerHTML += html; } });
     return elements.get(selector);
   }
-  const context = vm.createContext({ createSkillLibrary, document: { body: { dataset: {} }, querySelector: element, querySelectorAll: () => [], addEventListener() {} },
+  const context = vm.createContext({ createSkillLibrary, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }),
+    assetThumbnailUrl: id => `/api/thumbnails/${id}`, document: { body: { dataset: {} }, querySelector: element, querySelectorAll: () => [], addEventListener() {} },
     window: { addEventListener() {} }, videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote, structuredClone, console,
     resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities,
     updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions, createReferencePromptEditor,
@@ -231,7 +233,7 @@ test('页面脚本：数量改变更新总价，预览卡片可显式选片并�
     matches: () => false, closest: () => ({ dataset: { sceneId: 'clip' } }) } });
   assert.equal(state.project.scenes[0].generationCount, 3);
   assert.match(element('#scene-list').innerHTML, /预计合计 3.3 平台余额单位/);
-  assert.equal((element('#scene-list').innerHTML.match(/preload="none"/g) || []).length, 3);
+  assert.equal((element('#scene-list').innerHTML.match(/class="candidate-preview"/g) || []).length, 3);
   const button = { disabled: false, dataset: { sceneAction: 'select-candidate', assetId: 'asset-2' },
     closest: () => ({ dataset: { sceneId: 'clip' } }) };
   element('#scene-list').listeners.click({ target: { closest: selector => selector === '[data-scene-action]' ? button : null } });

@@ -3,18 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>镜策 · AI 创作工作台</title>
-  <link rel="stylesheet" href="/style.css">
+  <title>幻帧 MiraFrame · AI 创作工作台</title>
+  <link rel="icon" type="image/png" href="/miraframe-logo.png"><link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/canvas.css">
   <link rel="stylesheet" href="/liblib-theme.css">
   <link rel="stylesheet" href="/skills.css">
+  <link rel="stylesheet" href="/previs.css">
+  <link rel="stylesheet" href="/speech.css">
+  <link rel="stylesheet" href="/canvas-reference-ui.css">
   <script defer src="/lucide.js"></script>
   <script defer src="/jszip.js"></script>
   <script type="module" src="/app.js"></script>
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="/"><span class="brand-mark"><i data-lucide="aperture"></i></span><span>镜策<small>创作工作台</small></span></a>
+    <a class="brand" href="/"><span class="brand-mark"><img src="/miraframe-logo.png" alt="" width="40" height="40"></span><span>幻帧<small>MiraFrame</small></span></a>
     <nav class="workspace-tabs" role="tablist" aria-label="创作视图" aria-orientation="vertical">
       <button class="tab active" id="overview-tab" data-view="overview" role="tab" aria-controls="overview-view" aria-selected="true"><i data-lucide="layout-dashboard"></i>项目总览</button>
       <div class="nav-group-label" role="presentation">创作</div>
@@ -22,6 +25,8 @@
       <button class="tab" id="text-tab" data-view="text" role="tab" aria-controls="text-view" aria-selected="false"><i data-lucide="messages-square"></i>创作助手</button>
       <button class="tab" id="images-tab" data-view="images" role="tab" aria-controls="images-view" aria-selected="false"><i data-lucide="image"></i>图片生成 <span id="image-generation-count">0</span></button>
       <button class="tab" id="videos-tab" data-view="videos" role="tab" aria-controls="videos-view" aria-selected="false"><i data-lucide="clapperboard"></i>视频生成 <span id="scene-count">0</span></button>
+      <button class="tab" id="previs-tab" data-view="previs" role="tab" aria-controls="previs-view" aria-selected="false"><i data-lucide="box"></i>Blender 预演</button>
+      <button class="tab" id="speech-tab" data-view="speech" role="tab" aria-controls="speech-view" aria-selected="false"><i data-lucide="audio-lines"></i>语音生成</button>
       <div class="nav-group-label" role="presentation">内容管理</div>
       <button class="tab" id="assets-tab" data-view="assets" role="tab" aria-controls="assets-view" aria-selected="false"><i data-lucide="folder-open"></i>素材库 <span id="asset-count">0</span></button>
       <button class="tab" id="results-tab" data-view="results" role="tab" aria-controls="results-view" aria-selected="false"><i data-lucide="gallery-horizontal-end"></i>生成结果 <span id="result-count">0</span></button>
@@ -56,6 +61,7 @@
         <button data-launch-view="images"><i data-lucide="image-plus"></i><span>图片生成</span><i data-lucide="arrow-up-right"></i></button>
         <button data-launch-view="videos"><i data-lucide="clapperboard"></i><span>视频生成</span><i data-lucide="arrow-up-right"></i></button>
         <button data-launch-view="text"><i data-lucide="messages-square"></i><span>创作助手</span><i data-lucide="arrow-up-right"></i></button>
+        <button data-launch-view="speech"><i data-lucide="audio-lines"></i><span>语音生成</span><i data-lucide="arrow-up-right"></i></button>
       </nav>
       <div class="overview-project-toolbar"><div class="overview-project-heading"><h2>我的工程</h2><span id="overview-project-count">0</span></div><div class="overview-project-controls"><label class="project-search"><i data-lucide="search"></i><input id="overview-search" type="search" aria-label="搜索工程" placeholder="搜索工程"></label><select id="overview-sort" aria-label="工程排序"><option value="recent">最近更新</option><option value="name">名称排序</option></select><button id="overview-import" class="button"><i data-lucide="import"></i>导入</button></div></div>
       <div id="overview-projects" class="overview-projects" aria-live="polite"></div>
@@ -73,7 +79,7 @@
           <div id="canvas-marquee" hidden></div>
           <div id="canvas-empty" class="canvas-empty" hidden><span>✦</span><h2>从一个想法，开始自由创作。</h2><p>添加文字、图片、视频卡片或素材，拖动画布自由展开。</p><button class="primary" data-canvas-add="text">＋ 写下灵感</button></div>
         </div>
-        <div class="canvas-creation-toolbar" aria-label="画布工具"><button class="active" data-canvas-tool="select" aria-pressed="true" title="选择与移动卡片（V）"><span>↖</span>选择</button><button data-canvas-tool="marquee" aria-pressed="false" title="左键拖动框选卡片，再点击创建分组"><span>⬚</span>框选</button><button data-canvas-tool="hand" aria-pressed="false" title="抓手平移（H 或按住空格）"><span>✋</span>抓手</button><i></i><button data-canvas-add="text" title="添加文字便签"><span>Ｔ</span>文字</button><button data-canvas-add="ai" title="添加 AI 创作卡"><span>✦</span>AI 创作</button><button data-canvas-add="image" title="添加 AI 生图卡片"><span>▧</span>生图</button><button data-canvas-add="shot" title="添加视频卡片"><span>▣</span>视频</button><button data-canvas-add="assets" title="选择图片、视频或声音素材"><span>▧</span>素材</button></div>
+        <div class="canvas-creation-toolbar" aria-label="画布工具"><button class="active" data-canvas-tool="select" aria-pressed="true" title="选择与移动卡片（V）"><span>↖</span>选择</button><button data-canvas-tool="marquee" aria-pressed="false" title="左键拖动框选卡片，再点击创建分组"><span>⬚</span>框选</button><button data-canvas-tool="hand" aria-pressed="false" title="抓手平移（H 或按住空格）"><span>✋</span>抓手</button><i></i><button data-canvas-add="text" title="添加文字便签"><span>Ｔ</span>文字</button><button data-canvas-add="ai" title="添加 AI 创作卡"><span>✦</span>AI 创作</button><button data-canvas-add="image" title="添加 AI 生图卡片"><span>▧</span>生图</button><button data-canvas-add="shot" title="添加视频卡片"><span>▣</span>视频</button><button data-canvas-add="speech" title="添加语音生成卡片"><span>♫</span>语音</button><button data-canvas-add="assets" title="选择图片、视频或声音素材"><span>▧</span>素材</button></div>
         <div class="canvas-bottom-bar"><div class="canvas-history"><button id="undo-canvas" aria-label="撤销画布操作" title="撤销（Ctrl+Z）">↶</button><button id="redo-canvas" aria-label="重做画布操作" title="重做（Ctrl+Shift+Z）">↷</button></div><span class="canvas-help">点「框选」后左键拖动 · Shift 点选多张 · 创建分组</span><div class="canvas-zoom"><button id="arrange-canvas" title="整理卡片布局">整理</button><button id="fit-canvas" title="适应全部内容">适应</button><button id="zoom-out" aria-label="缩小画布">−</button><button id="zoom-level" title="恢复 100%">100%</button><button id="zoom-in" aria-label="放大画布">＋</button></div></div>
         <div class="canvas-controls">
         <div id="canvas-selection-tools" class="canvas-selection-tools" role="toolbar" aria-label="所选卡片操作" hidden><span id="selection-note"></span><button id="create-canvas-group" title="把所选卡片创建为分组">创建分组</button><button id="duplicate-selection" title="复制卡片（Ctrl+D）">复制</button><button id="remove-selection" title="移除画布卡片（Delete），保留素材与视频生成项">移除</button></div>
@@ -95,7 +101,7 @@
           <p class="honest-note">此步骤使用本地模板，不调用 AI、不产生模型费用。整理后可逐项编辑和生成视频。</p>
         </form>
       </aside>
-        <div id="canvas-context-menu" class="canvas-context-menu" hidden><button data-canvas-add="text">＋ 文字便签</button><button data-canvas-add="ai">＋ AI 创作卡</button><button data-canvas-add="image">＋ AI 生图</button><button data-canvas-add="shot">＋ 视频卡片</button><button data-canvas-add="assets">＋ 创作素材</button></div>
+        <div id="canvas-context-menu" class="canvas-context-menu" hidden><button data-canvas-add="text">＋ 文字便签</button><button data-canvas-add="ai">＋ AI 创作卡</button><button data-canvas-add="image">＋ AI 生图</button><button data-canvas-add="shot">＋ 视频卡片</button><button data-canvas-add="speech">＋ 语音生成卡</button><button data-canvas-add="assets">＋ 创作素材</button></div>
         </div>
         <aside id="canvas-text-panel" class="canvas-text-panel" aria-label="语言模型对话" hidden>
           <div id="canvas-text-resizer" class="canvas-text-resizer" role="separator" aria-orientation="vertical" aria-label="调整语言模型宽度" aria-controls="canvas-text-panel" tabindex="0" title="拖动调整对话宽度；方向键微调，Home 恢复默认"></div>
@@ -146,6 +152,30 @@
       <div class="section-bar job-title image-job-title"><h2>图片生成任务</h2><div class="job-list-tools"><button class="text-button" id="toggle-deleted-image-jobs" hidden>已删除记录</button><button class="text-button" id="refresh-image-jobs">刷新状态</button></div></div><p id="image-job-history-note" class="honest-note" hidden></p><div id="image-job-list" class="job-list"></div>
     </section>
 
+    <section id="speech-view" class="view hidden" role="tabpanel" aria-labelledby="speech-tab">
+      <div class="section-bar"><div><h2>语音生成</h2><p>用 MiniMax 为旁白、对白和创作文字配音</p></div></div>
+      <div class="speech-layout">
+        <form id="speech-form" class="speech-card">
+          <div class="speech-connection-line"><span class="speech-status-dot"></span><span id="speech-connection-status">尚未配置 MiniMax</span><a id="speech-pricing" href="https://platform.minimaxi.com/docs/guides/pricing-paygo" target="_blank" rel="noopener noreferrer">官方价格 ↗</a></div>
+          <div class="form-pair"><label>语音模型<select id="speech-model" name="model" required></select></label><label>音频格式<select name="format"><option value="mp3">MP3 · 通用</option><option value="wav">WAV · 编辑素材</option></select></label></div>
+          <div class="speech-voice-row"><label>账户音色<select id="speech-voice-picker"><option value="">手动填写 Voice ID</option></select></label><button type="button" class="button" id="speech-refresh-voices">读取音色</button><button type="button" class="button" id="speech-new-voice">新建音色</button></div>
+          <label>Voice ID<input name="voiceId" id="speech-voice-id" maxlength="256" value="male-qn-qingse" required placeholder="选择账户音色，或填写官方 Voice ID"></label>
+          <div id="speech-voice-description" class="speech-caption">可读取账户音色，也可手动填写已有音色 ID。默认 ID 来自官方示例。</div>
+          <label>配音名称<input name="name" maxlength="120" placeholder="例如：片头旁白（可留空）"></label>
+          <div class="speech-draft-toolbar"><label>导入工程旁白<select id="speech-scene-picker"><option value="all">全部视频生成项的旁白</option></select></label><button class="button" type="button" id="speech-import-narration">填入文案</button></div>
+          <label class="speech-text-label">配音文案<textarea id="speech-text" name="text" rows="9" required placeholder="在这里填写需要读出的文字。导入旁白后，可以先修改，再提交配音。"></textarea></label>
+          <div class="speech-text-meta"><span id="speech-character-count">0 / 9999 字符</span><span id="speech-target"></span><button type="button" class="text-button" id="speech-clear-target" hidden>取消关联</button></div>
+          <div class="speech-parameters"><label>语速<input type="number" name="speed" min="0.5" max="2" step="0.05" value="1" required></label><label>音量<input type="number" name="vol" min="0.01" max="10" step="0.01" value="1" required></label><label>音调<input type="number" name="pitch" min="-12" max="12" step="1" value="0" required></label><label>情绪<select id="speech-emotion" name="emotion"></select></label></div>
+          <p id="speech-cost" class="speech-cost" role="status" aria-live="polite">预计基础配音费 ¥0.0000</p>
+          <p class="speech-caption">提交后可继续生成其他配音。估价采用官方按量刊例价，汉字按 2 个计费字符估算；不含套餐折扣或自定义音色首次费用，实际扣费以平台为准。</p>
+          <div class="speech-submit-row"><button type="submit" class="primary" id="speech-submit">生成配音（可能收费）</button><span>每次提交生成一个独立任务</span></div>
+          <div id="speech-message" class="connection-message" role="status" aria-live="polite"></div>
+          <div id="speech-pending" class="speech-pending" hidden><span>上次提交尚未确认，核对后可以继续提交。</span><button class="button" id="speech-recover-submit" type="button">核对本次提交</button></div>
+        </form>
+        <aside class="speech-results-panel" aria-label="当前工程配音任务"><div class="speech-results-heading"><div><h2>配音任务</h2><span id="speech-job-count">0 个任务</span></div><button type="button" class="text-button" id="speech-refresh-jobs">刷新状态</button></div><div id="speech-job-list" class="speech-job-list"></div></aside>
+      </div>
+    </section>
+
     <section id="videos-view" class="view hidden" role="tabpanel" aria-labelledby="videos-tab">
       <div class="section-bar"><div><h2>视频生成</h2><p id="plan-note">视频卡片</p></div><button class="button" id="add-scene"><i data-lucide="plus"></i>添加视频</button></div>
       <div id="scene-list" class="scene-list"></div>
@@ -157,7 +187,7 @@
         <div><h2>生成结果</h2></div>
         <div class="results-tools">
           <label class="project-filter" for="result-project-filter">工程<select id="result-project-filter"><option value="all">全部工程</option></select></label>
-          <label for="result-filter">显示内容<select id="result-filter"><option value="all">全部结果</option><option value="image">图片</option><option value="video">视频</option></select></label>
+          <label for="result-filter">显示内容<select id="result-filter"><option value="all">全部结果</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option></select></label>
           <label for="result-sort">时间顺序<select id="result-sort"><option value="newest" selected>最新在前</option><option value="oldest">最早在前</option></select></label>
         </div>
       </div>
@@ -200,6 +230,38 @@
         </aside>
       </div>
     </section>
+    <section id="previs-view" class="view hidden" role="tabpanel" aria-labelledby="previs-tab">
+      <div class="previs-heading"><div><h2>Blender 镜头预演</h2><p>先确定空间、动作和运镜，再把预演交给视频模型。支持不同故事的一镜到底。</p></div></div>
+      <div class="previs-layout"><div class="previs-editor-column">
+        <section class="previs-panel" id="previs-chat-panel" aria-labelledby="previs-chat-title"><h3 id="previs-chat-title">故事与预演对话</h3>
+          <p class="previs-note">在同一段对话里讲故事、整理场景、调整动作与运镜。场景 JSON 出错时，直接告诉助手修复，检查错误会随本轮消息一起发送。</p>
+          <label>语言模型<select id="previs-text-model"><option value="">请配置语言模型</option></select></label>
+          <div class="previs-parameters"><label>时长（秒）<input id="previs-duration" type="number" min="1" max="30" step="0.5" value="8"></label><label>帧率<select id="previs-fps"><option>12</option><option selected>24</option><option>25</option><option>30</option></select></label><label>画面比例<select id="previs-ratio"><option>16:9</option><option>9:16</option><option>1:1</option></select></label><label>预演短边<select id="previs-resolution"><option value="360">360px</option><option value="540">540px</option><option value="720">720px</option></select></label></div>
+          <details id="previs-story-details"><summary>故事摘要（可选，可继续编辑）</summary><label for="previs-story">故事和镜头要求<textarea id="previs-story" rows="3" placeholder="已有的故事要求保留在这里。也可以直接在下方聊天框讲故事。"></textarea></label></details>
+          <p id="previs-chat-source" class="previs-chat-source" role="status"></p>
+          <div id="previs-chat-history" class="previs-chat-history" role="log" aria-label="故事与预演对话" aria-live="polite"></div>
+          <form id="previs-chat-form"><label for="previs-chat-input">告诉助手你的想法<textarea id="previs-chat-input" rows="4" maxlength="12000" placeholder="讲一个新故事、调整人物动作或摄影机路线，或说：场景检查出错了，请帮我修复。"></textarea></label>
+            <div class="previs-actions"><button id="previs-chat-send" type="submit" class="primary">发送</button><button id="previs-chat-repair" type="button" class="button" disabled>请 AI 修复场景</button><button id="previs-chat-clear" type="button" class="button">清空本工程对话</button></div></form>
+          <p id="previs-chat-status" class="previs-note" role="status" aria-live="polite"></p>
+          <section id="previs-chat-proposal" class="previs-chat-proposal" hidden aria-label="待应用的场景方案"><h4>待应用的场景方案</h4><p id="previs-chat-proposal-note"></p><ul id="previs-chat-changes"></ul>
+            <details><summary>查看完整场景方案 JSON</summary><pre id="previs-chat-proposal-json"></pre></details>
+            <div class="previs-actions"><button id="previs-chat-apply" type="button" class="primary">应用到场景编辑框</button><button id="previs-chat-discard" type="button" class="button">放弃此方案</button></div></section>
+          <div class="previs-scene-editor"><p id="previs-summary" role="status"></p><p id="previs-validation-status" class="previs-note" role="status" aria-live="polite"></p>
+            <details id="previs-spec-details"><summary>编辑场景 JSON（道具、人物路线、镜头与节拍）</summary><label for="previs-spec">scene_spec<textarea id="previs-spec" rows="18" spellcheck="false"></textarea></label><div class="previs-actions"><button type="button" id="previs-validate" class="button">检查场景配置</button><button id="previs-load-example" type="button" class="button">载入本地示例</button></div></details>
+          </div>
+          <details id="previs-versions"><summary>恢复之前的场景版本</summary><label for="previs-version-select">选择版本<select id="previs-version-select"></select></label><button id="previs-version-restore" type="button" class="button">恢复所选版本</button></details>
+          <p class="previs-note">发送会使用所选语言模型，可能产生文字接口费用。场景方案检查通过后由你应用，再手动开始本机预演。模型读取故事、场景和文字反馈，不会自动看到 MP4 画面。</p>
+        </section>
+        <section class="previs-panel" aria-labelledby="previs-tools-title"><h3 id="previs-tools-title">连接本机 Blender</h3>
+          <label class="previs-helper-switch"><input id="previs-use-helper" type="checkbox">通过本机助手渲染</label>
+          <div id="previs-helper-panel" hidden><p class="previs-note">使用你电脑的算力渲染。首次下载并解压助手，双击“安装助手.cmd”；以后双击桌面助手入口启动，再回到此页面连接。Blender 需自行安装，助手会自动检测。首次连接需允许网站授权和本地网络访问。</p><div class="previs-actions"><a class="button" href="/api/previs/helper.zip">首次安装：下载助手</a><button class="primary" type="button" id="previs-connect">连接本机渲染</button><button type="button" class="button" id="previs-open-helper">高级工具设置</button></div></div>
+          <div id="previs-direct-tools"><details><summary>设置 Blender 与 FFmpeg 路径</summary><form id="previs-tools-form"><label>Blender 可执行文件<input id="previs-blender-path" placeholder="自动检测已安装 Blender；也可填写 blender.exe 完整路径"></label><label>FFmpeg 可执行文件<input id="previs-ffmpeg-path" placeholder="自动检测 MP4 编码工具"></label><label>渲染方式<select id="previs-engine"><option value="auto">自动（白模 / CPU 回退）</option><option value="workbench">Workbench 白模</option><option value="cycles">Cycles CPU</option></select></label><button class="button" type="submit">保存并检测</button></form></details></div>
+          <p id="previs-tool-status" role="status" aria-live="polite"></p><div class="previs-actions"><button type="button" id="previs-check-tools" class="button">检测工具</button><button type="button" id="previs-start" class="primary" disabled>开始本机预演</button></div>
+          <p class="previs-note">生成简单几何白模、人物代理和摄影机动画。完成后自动合成并验证 MP4，保存关键帧、路线图与 Blender 工程。网页连接中断时，本机渲染继续；重新连接后可保存回网站。</p>
+        </section><p id="previs-message" role="status" aria-live="polite"></p>
+      </div><section class="previs-panel previs-results-panel" aria-labelledby="previs-results-title"><h3 id="previs-results-title">预览与使用结果</h3><div id="previs-job-list"></div></section></div>
+    </section>
+
     <section id="skills-view" class="view hidden" role="tabpanel" aria-labelledby="skills-tab">
       <div class="skills-toolbar"><h2>技能库</h2><div class="skills-commands"><button id="skill-new" type="button" class="button"><i data-lucide="plus"></i>新建</button><button id="skill-import-folder" type="button" class="button"><i data-lucide="folder-open"></i>导入文件夹</button><button id="skill-import-files" type="button" class="primary"><i data-lucide="import"></i>导入文件</button></div></div>
       <p id="skill-status" role="status" aria-live="polite"></p>
@@ -213,7 +275,7 @@
     <div class="dialog-heading"><div><span class="eyebrow">CONNECTIONS</span><h2 id="center-title">连接中心</h2><p class="center-subtitle">配置一次，创作时只需选择模型</p></div><button type="button" class="icon-button" id="connections-center-close" aria-label="关闭连接中心">×</button></div>
     <div class="center-tabs" role="tablist" aria-label="连接设置"><button type="button" role="tab" aria-selected="true" aria-controls="center-api-panel" id="center-api-tab">API 接口</button><button type="button" role="tab" aria-selected="false" aria-controls="center-storage-panel" id="center-storage-tab">云存储</button></div>
     <section id="center-api-panel" role="tabpanel" aria-labelledby="center-api-tab"><div id="center-list-view"><div class="center-toolbar"><div><h3>我的接口</h3><p>每个接口可以绑定多个模型</p></div><div class="connection-buttons"><button type="button" class="button" id="center-refresh-models">刷新模型</button><button type="button" class="primary" id="center-add">＋ 添加接口</button></div></div><div id="connections-list"></div><div hidden><button id="center-legacy" type="button">视频连接</button><button id="center-image-legacy" type="button">图片连接</button><button id="center-text-legacy" type="button">语言模型连接</button></div><div id="center-existing-editor" hidden></div></div>
-    <form id="connection-editor" hidden><div class="center-editor-heading"><button type="button" class="button" id="connection-editor-reset">← 返回接口列表</button><h3 id="connection-editor-title">添加接口</h3></div><input type="hidden" name="id"><div class="form-pair"><label>接口名称<input name="name" required maxlength="80" placeholder="例如 Nano 图片接口"></label><label>用于哪些模型<select name="kind"><option value="image">图片模型</option><option value="video">视频模型</option><option value="text">语言模型</option></select></label></div><label>平台地址<select name="baseUrl"></select></label><label>API 令牌<input type="password" name="apiKey" autocomplete="off" placeholder="粘贴令牌；编辑时留空保留已保存令牌"></label><div class="center-model-heading"><strong>绑定模型</strong><div class="center-model-actions"><span id="center-model-count">已选 0 个</span><button type="button" class="button" id="center-read-models">读取此令牌的模型</button></div></div><p class="honest-note">填写 API 令牌后读取模型，勾选需要的模型再保存。读取目录不会提交生成任务。</p><input type="search" id="center-model-search" aria-label="搜索模型" placeholder="搜索图片、视频或语言模型名称"><div id="center-model-choices"></div><select name="models" multiple hidden></select><details class="center-existing"><summary>列表里没有需要的模型？</summary><label>补充模型名称（每行一个）<textarea name="extraModels" rows="2" placeholder="填写平台提供的完整模型名称"></textarea></label></details><p class="honest-note">保存后，选择这些模型会自动使用此接口。同一模型只能绑定一个接口。</p><div id="center-editor-message" class="connection-message" role="status" aria-live="polite"></div><div class="center-editor-footer"><button type="button" class="button" id="center-editor-cancel">取消</button><button type="submit" class="primary">保存接口</button></div></form></section>
+    <form id="connection-editor" hidden><div class="center-editor-heading"><button type="button" class="button" id="connection-editor-reset">← 返回接口列表</button><h3 id="connection-editor-title">添加接口</h3></div><input type="hidden" name="id"><div class="form-pair"><label>接口名称<input name="name" required maxlength="80" placeholder="例如 MiniMax 语音接口"></label><label>用于哪些模型<select name="kind"><option value="image">图片模型</option><option value="video">视频模型</option><option value="text">语言模型</option><option value="speech">语音模型</option></select></label></div><label>平台地址<select name="baseUrl"></select></label><label>API 令牌<input type="password" name="apiKey" autocomplete="off" placeholder="粘贴令牌；编辑时留空保留已保存令牌"></label><div class="center-model-heading"><strong>绑定模型</strong><div class="center-model-actions"><span id="center-model-count">已选 0 个</span><button type="button" class="button" id="center-read-models">读取此令牌的模型</button></div></div><p class="honest-note">填写 API 令牌后读取模型，勾选需要的模型再保存。读取目录不会提交生成任务。</p><input type="search" id="center-model-search" aria-label="搜索模型" placeholder="搜索图片、视频、语言模型名称"><div id="center-model-choices"></div><select name="models" multiple hidden></select><details class="center-existing"><summary>列表里没有需要的模型？</summary><label>补充模型名称（每行一个）<textarea name="extraModels" rows="2" placeholder="填写平台提供的完整模型名称"></textarea></label></details><p class="honest-note">保存后，选择这些模型会自动使用此接口。同一模型只能绑定一个接口。</p><div id="center-editor-message" class="connection-message" role="status" aria-live="polite"></div><div class="center-editor-footer"><button type="button" class="button" id="center-editor-cancel">取消</button><button type="submit" class="primary">保存接口</button></div></form></section>
     <section id="center-storage-panel" role="tabpanel" aria-labelledby="center-storage-tab" hidden></section><p id="connections-center-message" role="status" aria-live="polite"></p>
   </dialog>
   <dialog id="text-settings-dialog"><form id="text-settings-form"><div class="dialog-heading"><div><span class="eyebrow">TEXT MODEL CONNECTION</span><h2>连接语言模型平台</h2></div><button type="button" class="icon-button" id="close-text-settings" aria-label="关闭">×</button></div><p class="dialog-description">北北海文本对话 API · 使用 OpenAI 兼容的 Chat Completions 协议。API Key 只保存在本机，页面不会回显。</p><label>Base URL<input value="https://sub.beibeihai.xyz/v1" readonly></label><label>API Key<input type="password" name="apiKey" autocomplete="off" placeholder="粘贴文本模型 API Key；留空保留原密钥"></label><p id="text-key-state" class="honest-note"></p><label>默认语言模型<select name="textModel" id="text-settings-model"></select></label><div class="connection-buttons"><button type="button" class="button" id="refresh-text-models">刷新语言模型</button><button type="button" class="button" id="check-text-connection">验证令牌（只读）</button><button type="submit" class="primary">保存语言模型连接</button></div><div id="text-connection-message" class="connection-message"></div><p id="text-model-catalog-note" class="honest-note">语言模型目录尚未读取。保存 API Key 后点击刷新。</p><a class="text-link" href="https://sub.beibeihai.xyz/pricing" target="_blank" rel="noreferrer">打开文本模型平台说明 ↗</a></form></dialog>
@@ -230,6 +292,33 @@
   <dialog id="skill-import-dialog" aria-labelledby="skill-import-title"><div class="dialog-heading"><h2 id="skill-import-title">导入技能</h2><button id="skill-cancel-import" type="button" class="icon-button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><div id="skill-import-preview"></div><div class="connection-buttons"><button id="skill-confirm-import" class="primary" type="button">确认导入</button></div></dialog>
   <input id="skill-file-input" type="file" accept=".md,.zip" multiple hidden>
   <input id="skill-folder-input" type="file" webkitdirectory multiple hidden>
+  <dialog id="voice-studio" class="voice-studio" aria-labelledby="voice-studio-title">
+    <div class="dialog-heading"><div><h2 id="voice-studio-title">新建音色</h2><p id="voice-studio-connection" class="voice-connection-caption"></p></div><button type="button" id="voice-studio-close" class="icon-button" aria-label="关闭新建音色">×</button></div>
+    <div class="voice-studio-layout">
+      <form id="voice-create-form" class="voice-create-form">
+        <div class="voice-methods" role="tablist" aria-label="音色创建方式"><button type="button" id="voice-kind-clone" role="tab" aria-selected="true" data-voice-kind="clone">上传录音复刻</button><button type="button" id="voice-kind-design" role="tab" aria-selected="false" data-voice-kind="design">文字设计音色</button></div>
+        <p id="voice-method-caption" class="speech-caption"></p>
+        <label>音色名称<input name="name" maxlength="120" required placeholder="例如：温柔女声旁白"></label>
+        <div class="voice-id-row"><label>Voice ID<input name="voiceId" maxlength="256" required spellcheck="false"></label><button type="button" id="voice-new-id" class="text-button">换一个 ID</button></div>
+        <p class="speech-caption">名称保存在幻帧 MiraFrame；Voice ID 用于 MiniMax 后续配音，可保留自动生成的值。</p>
+        <div id="voice-clone-fields">
+          <label class="voice-file-picker">复刻录音<input id="voice-recording-file" type="file" accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/wav"></label>
+          <p class="speech-caption">MP3 / M4A / WAV · 10 秒至 5 分钟 · 最大 20 MB。建议使用单人、无背景音乐的清晰录音。</p>
+          <div id="voice-recording-info" class="voice-recording-info" role="status" aria-live="polite"></div>
+          <audio id="voice-recording-player" controls preload="none" hidden aria-label="试听已上传录音"></audio>
+          <div class="voice-audio-options"><label><input type="checkbox" name="noiseReduction">去除背景噪声</label><label><input type="checkbox" name="volumeNormalization">统一录音音量</label></div>
+        </div>
+        <div id="voice-design-fields" hidden><label>音色描述<textarea name="prompt" rows="4" maxlength="2000" placeholder="例如：30 岁左右的女声，音色温暖清晰，语气从容，适合品牌故事旁白。"></textarea></label></div>
+        <label id="voice-preview-label">试听文案<textarea name="previewText" rows="3" maxlength="1000" placeholder="填写一小段用于试听的文字。">你好，这是我在幻帧 MiraFrame创建的新音色，期待讲述更多故事。</textarea></label>
+        <p id="voice-create-cost" class="voice-create-cost" role="status" aria-live="polite"></p>
+        <p id="voice-create-fee" class="speech-caption"></p>
+        <button type="submit" id="voice-create-submit" class="primary">创建复刻音色</button>
+        <div id="voice-create-message" class="connection-message" role="status" aria-live="polite"></div>
+        <div id="voice-create-pending" class="speech-pending" hidden><span>这次提交尚未确认，先恢复原任务后可继续创建。</span><button type="button" id="voice-create-recover" class="button">恢复本次任务</button></div>
+      </form>
+      <aside class="voice-history-panel" aria-label="当前账户创建的音色"><div class="speech-results-heading"><div><h2>我的自定义音色</h2><span id="voice-job-count">0 个任务</span></div><button type="button" id="voice-refresh-jobs" class="text-button">刷新</button></div><div id="voice-job-list" class="speech-job-list"></div><p class="voice-retention-note">新创建的音色为临时音色。请在 7 天内用于正式配音，平台才会长期保留；保存本地 Voice ID 不会延长平台有效期。</p></aside>
+    </div>
+  </dialog>
   <div id="toast" role="status" aria-live="polite"></div>
   <input id="asset-input" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,audio/mpeg,audio/wav" multiple hidden>
   <input id="import-input" type="file" accept=".json,application/json" hidden>

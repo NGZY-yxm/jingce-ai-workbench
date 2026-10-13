@@ -15,11 +15,13 @@ import * as imageParameters from '../public/image-parameters.js';
 import { renderTextMarkdown } from '../public/text-markdown.js';
 import { createSkillLibrary, skillOptions } from '../public/skills.js';
 import { imageHistoryContent } from '../public/chat-images.js';
+import { createPrevisWorkflow } from '../public/previs.js';
+import { thumbnailUrl, assetThumbnailUrl } from '../public/media-thumbnails.js';
 import { capabilitySummary } from '../public/model-capabilities.js';
 import { createCapabilityEditor } from '../public/capability-editor.js';
 
-const views = ['overview', 'canvas', 'text', 'images', 'videos', 'assets', 'results', 'skills'];
-const labels = ['项目总览', '创作画布', '创作助手', '图片生成', '视频生成', '素材库', '生成结果', '技能库'];
+const views = ['overview', 'canvas', 'text', 'images', 'videos', 'previs', 'speech', 'assets', 'results', 'skills'];
+const labels = ['项目总览', '创作画布', '创作助手', '图片生成', '视频生成', 'Blender 预演', '语音生成', '素材库', '生成结果', '技能库'];
 
 // Model only the DOM operations used by app.js. Rendering, routing, form
 // validation and API request construction all run from the real page script.
@@ -159,7 +161,7 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
   }
   const context = vm.createContext({ document, window: { addEventListener() {}, confirm }, Blob, URL: { createObjectURL: () => 'blob:test-archive', revokeObjectURL() {} }, JSZip: Zip,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, structuredClone, console,
-    ...videoParameters, ...referenceModel, ...referenceApi, ...promptMentions, ...promptEditor, ...imageParameters, renderTextMarkdown, createSkillLibrary, skillOptions, imageHistoryContent, capabilitySummary, createCapabilityEditor, createAssetCanvasNode,
+    ...videoParameters, ...referenceModel, ...referenceApi, ...promptMentions, ...promptEditor, ...imageParameters, renderTextMarkdown, createSkillLibrary, skillOptions, imageHistoryContent, thumbnailUrl, assetThumbnailUrl, capabilitySummary, createCapabilityEditor, createAssetCanvasNode, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }),
     createInfiniteCanvas: value => { bridge = value; return canvas; }, setTimeout: () => 1, clearTimeout() {},
     crypto: { randomUUID: () => 'operation-' + ++sequence },
     fetch: async (url, options = {}) => {
@@ -302,7 +304,7 @@ test('对话只把原始文字发送给接口，新回复直接显示表格且�
   assert.equal(h.state.textBusy, false);
 });
 
-test('页面结构提供六个独立入口，图片页和结果页保留自己的操作控件', async () => {
+test('页面结构提供独立创作入口，图片、语音和结果页保留自己的操作控件', async () => {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const navigation = [...html.matchAll(/<button\b[^>]*data-view="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)];
   assert.deepEqual(navigation.map(match => match[1]), views);
@@ -316,7 +318,7 @@ test('页面结构提供六个独立入口，图片页和结果页保留自己�
   }
   const resultFilter = html.match(/<select\b[^>]*id="result-filter"[^>]*>([\s\S]*?)<\/select>/)?.[1];
   assert.ok(resultFilter, '结果页应提供类型筛选器');
-  assert.deepEqual([...resultFilter.matchAll(/<option\b[^>]*value="([^"]*)"/g)].map(match => match[1]), ['all', 'image', 'video']);
+  assert.deepEqual([...resultFilter.matchAll(/<option\b[^>]*value="([^"]*)"/g)].map(match => match[1]), ['all', 'image', 'video', 'audio']);
 });
 
 test('点击五个入口更新可见页面和选中状态，返回创作画布重新激活画布', async () => {
@@ -373,7 +375,7 @@ test('旧入口名称映射到新的视频和结果页面，工程中的 scenes 
   assert.deepEqual(h.requests, []);
 });
 
-test('生成结果只展示有效模型图片视频，卡片保留预览与详情，详情支持下载和放入画布', async () => {
+test('生成结果展示有效模型图片视频和音频，详情支持下载和放入画布', async () => {
   const h = await pageHarness();
   const generatedImage = { id: 'generated-image', kind: 'image', source: 'model', name: '人物 <b>一</b>.png', size: 100,
     createdAt: '2026-10-08T01:00:00Z' };
@@ -387,13 +389,14 @@ test('生成结果只展示有效模型图片视频，卡片保留预览与详�
   h.setView('results');
   const results = h.element('#result-list');
   assert.match(results.innerHTML, /generated-image/); assert.match(results.innerHTML, /generated-video/);
-  assert.doesNotMatch(results.innerHTML, /uploaded-image|generated-audio|deleted-image/);
+  assert.match(results.innerHTML, /generated-audio/);
+  assert.doesNotMatch(results.innerHTML, /uploaded-image|deleted-image/);
   assert.match(results.innerHTML, /人物 &lt;b&gt;一&lt;\/b&gt;\.png/);
   assert.doesNotMatch(results.innerHTML, /<b>一<\/b>/);
-  const imageThumbnail = results.innerHTML.match(/<img\b[^>]*src="\/api\/assets\/generated-image"[^>]*>/)?.[0];
-  const videoThumbnail = results.innerHTML.match(/<video\b[^>]*src="\/api\/assets\/generated-video[^"]*"[^>]*>/)?.[0];
-  assert.ok(imageThumbnail, '图片结果应直接显示真实图片缩略图');
-  assert.ok(videoThumbnail, '视频结果应直接显示真实视频缩略图');
+  const imageThumbnail = results.innerHTML.match(/<img\b[^>]*src="\/api\/assets\/generated-image\?thumbnail=1"[^>]*>/)?.[0];
+  const videoThumbnail = results.innerHTML.match(/<img\b[^>]*src="\/api\/assets\/generated-video\?thumbnail=1"[^>]*>/)?.[0];
+  assert.ok(imageThumbnail, '图片结果应直接显示本地缩略图');
+  assert.ok(videoThumbnail, '视频结果应直接显示本地缩略图');
   for (const thumbnail of [imageThumbnail, videoThumbnail]) {
     assert.doesNotMatch(thumbnail, /\bhidden(?:=|\s|>)|display\s*:\s*none|visibility\s*:\s*hidden/);
   }
@@ -407,6 +410,10 @@ test('生成结果只展示有效模型图片视频，卡片保留预览与详�
   assert.match(results.innerHTML, /generated-image/); assert.doesNotMatch(results.innerHTML, /generated-video/);
   filter.value = 'video'; await filter.fire('change', { target: filter });
   assert.match(results.innerHTML, /generated-video/); assert.doesNotMatch(results.innerHTML, /generated-image/);
+  filter.value = 'audio'; await filter.fire('change', { target: filter });
+  assert.match(results.innerHTML, /generated-audio/); assert.doesNotMatch(results.innerHTML, /generated-video|generated-image/);
+  await results.fire('click', { target: delegatedTarget('[data-preview-asset]', { previewAsset: 'generated-audio' }) });
+  assert.equal(h.element('#preview-content').children[0].tagName, 'AUDIO');
   await results.fire('click', { target: delegatedTarget('[data-preview-asset]', { previewAsset: generatedVideo.id }) });
   assert.equal(h.element('#preview-title').textContent, generatedVideo.name);
   assert.equal(h.element('#preview-content').children[0].tagName, 'VIDEO');
@@ -1110,7 +1117,7 @@ test('素材库生成图片保留以此图生成入口，选择预览移除和�
   await h.element('#asset-list').fire('click', { target: delegatedTarget('[data-use-image-reference]', { useImageReference: asset.id }) });
   assert.equal(h.state.view, 'images');
   assert.deepEqual(Array.from(h.state.imageReferenceIds), [asset.id]);
-  assert.match(h.element('#image-page-references').innerHTML, /src="\/api\/assets\/image-reuse-source"/);
+  assert.match(h.element('#image-page-references').innerHTML, /src="\/api\/assets\/image-reuse-source\?thumbnail=1"/);
   assert.match(h.element('#image-page-references').innerHTML, /原生成图.png/);
   h.addImagePageReference(asset.id);
   assert.equal(h.state.imageReferenceIds.length, 1, '同一图片不重复作为参考');
@@ -1274,7 +1281,7 @@ test('图片页选择三张并使用上传和生成参考图，一次提交后�
   assert.deepEqual(Array.from(h.state.imageReferenceIds), [uploaded.id, generated.id]);
   h.element('#result-filter').value = 'image'; h.setView('results');
   for (const asset of resultAssets) assert.match(h.element('#result-list').innerHTML,
-    new RegExp('<img[^>]+src="/api/assets/' + asset.id + '"'));
+    new RegExp('<img[^>]+src="/api/assets/' + asset.id + '\\?thumbnail=1"'));
   assert.equal(h.state.project.scenes.length, 0);
   assert.equal(h.requests.filter(request => request.method === 'POST').length, 1, '轮询完成全部结果不会重新提交生成');
 });

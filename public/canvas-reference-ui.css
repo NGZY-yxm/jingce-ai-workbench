@@ -1,0 +1,585 @@
+/* The canvas has the same layout in both themes; only its surface palette changes. */
+:root[data-theme="day"] #creative-canvas {
+  --canvas-ui-ground: #f4f6f8;
+  --canvas-ui-dot: #d6dce5;
+  --canvas-ui-surface: #ffffff;
+  --canvas-ui-soft: #f2f5f8;
+  --canvas-ui-border: #dce2e9;
+  --canvas-ui-ink: #202b38;
+  --canvas-ui-muted: #6f7c8a;
+  --canvas-ui-accent: #2f668e;
+  --canvas-ui-shadow: 0 14px 38px #1d354519;
+  --canvas-ui-selection: #465b6e;
+}
+:root[data-theme="night"] #creative-canvas {
+  --canvas-ui-ground: #0d0e10;
+  --canvas-ui-dot: #272a2f;
+  --canvas-ui-surface: #1d1e21;
+  --canvas-ui-soft: #282a2e;
+  --canvas-ui-border: #36383e;
+  --canvas-ui-ink: #f0f1f3;
+  --canvas-ui-muted: #a1a4ab;
+  --canvas-ui-accent: #c4d8ed;
+  --canvas-ui-shadow: 0 18px 44px #0008;
+  --canvas-ui-selection: #e4e8ec;
+}
+
+:root[data-theme] #creative-canvas {
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-ground);
+  border-color: var(--canvas-ui-border);
+  border-radius: 14px;
+  --canvas-toolbar-bg: var(--canvas-ui-surface);
+}
+:root[data-theme] #creative-canvas.canvas-expanded { border-radius: 0; }
+:root[data-theme] #creative-canvas::after { display: none; }
+:root[data-theme] #canvas-viewport {
+  background-color: var(--canvas-ui-ground);
+  background-image: radial-gradient(circle, var(--canvas-ui-dot) .8px, transparent 1px);
+  background-size: var(--canvas-dot-size, 24px) var(--canvas-dot-size, 24px);
+}
+:root[data-theme] #creative-canvas .canvas-toolbar {
+  min-height: 51px;
+  padding: 9px 15px;
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-ground);
+  border-bottom: 1px solid var(--canvas-ui-border);
+}
+:root[data-theme] #creative-canvas .canvas-heading strong { color: var(--canvas-ui-ink); font-size: 12px; }
+:root[data-theme] #creative-canvas .canvas-heading > span:last-child { color: var(--canvas-ui-muted); }
+:root[data-theme] #creative-canvas .canvas-top-actions button {
+  min-height: 32px;
+  padding: 6px 11px;
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-surface);
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 8px;
+}
+:root[data-theme] #creative-canvas .canvas-top-actions button:hover,
+:root[data-theme] #creative-canvas .canvas-top-actions button[aria-expanded="true"] {
+  background: var(--canvas-ui-soft);
+  color: var(--canvas-ui-accent);
+}
+
+/* Keep the tool rail, overview and zoom controls quiet around the work. */
+:root[data-theme] #creative-canvas .canvas-workspace { --canvas-tool-width: 44px; }
+:root[data-theme] #creative-canvas .canvas-workspace > .canvas-creation-toolbar {
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  width: 44px;
+  max-height: calc(100% - 112px);
+  padding: 5px;
+  gap: 3px;
+  background: var(--canvas-ui-surface);
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 12px;
+  box-shadow: var(--canvas-ui-shadow);
+}
+:root[data-theme] #creative-canvas .canvas-creation-toolbar button {
+  min-height: 37px;
+  padding: 4px 0;
+  color: var(--canvas-ui-muted);
+  font-size: 0;
+  border-radius: 8px;
+}
+:root[data-theme] #creative-canvas .canvas-creation-toolbar button > span { font-size: 18px; }
+:root[data-theme] #creative-canvas .canvas-creation-toolbar button:hover,
+:root[data-theme] #creative-canvas .canvas-creation-toolbar button.active {
+  color: var(--canvas-ui-accent);
+  background: var(--canvas-ui-soft);
+}
+:root[data-theme] #creative-canvas .canvas-creation-toolbar i { background: var(--canvas-ui-border); }
+:root[data-theme] #creative-canvas .canvas-controls {
+  top: auto;
+  bottom: 58px;
+  left: 12px;
+  right: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+:root[data-theme] #creative-canvas .canvas-controls .canvas-overview:not(.collapsed) {
+  width: 142px;
+  height: 98px;
+  background: var(--canvas-ui-surface);
+  border-color: var(--canvas-ui-border);
+  border-radius: 10px;
+}
+:root[data-theme] #creative-canvas .canvas-overview-toggle {
+  color: var(--canvas-ui-muted);
+  background: var(--canvas-ui-surface);
+}
+:root[data-theme] #creative-canvas .canvas-selection-tools {
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-surface);
+  border-color: var(--canvas-ui-border);
+  border-radius: 10px;
+}
+:root[data-theme] #creative-canvas .canvas-workspace > .canvas-bottom-bar {
+  left: 12px;
+  right: auto;
+  bottom: 12px;
+  width: fit-content;
+  min-height: 34px;
+  padding: 3px 5px;
+  gap: 5px;
+  background: var(--canvas-ui-surface);
+  border-color: var(--canvas-ui-border);
+  border-radius: 10px;
+  box-shadow: var(--canvas-ui-shadow);
+}
+:root[data-theme] #creative-canvas .canvas-help { display: none; }
+:root[data-theme] #creative-canvas .canvas-history button,
+:root[data-theme] #creative-canvas .canvas-zoom button { color: var(--canvas-ui-muted); }
+:root[data-theme] #creative-canvas .canvas-history button:hover,
+:root[data-theme] #creative-canvas .canvas-zoom button:hover {
+  background: var(--canvas-ui-soft);
+  color: var(--canvas-ui-accent);
+}
+:root[data-theme] #creative-canvas #canvas-minimap { background: var(--canvas-ui-ground); }
+
+/* A card remains a clean media cover until the user clicks it. */
+:root[data-theme] #creative-canvas .canvas-node.cover-card {
+  background: transparent;
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 22px #0002;
+}
+:root[data-theme] #creative-canvas .canvas-node.cover-card.selected,
+:root[data-theme] #creative-canvas .canvas-node.cover-card.details-open {
+  border-color: var(--canvas-ui-selection);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--canvas-ui-selection) 40%, transparent), 0 12px 28px #0003;
+}
+:root[data-theme] #creative-canvas .cover-card .canvas-cover,
+:root[data-theme] #creative-canvas .cover-card .canvas-cover > .canvas-media {
+  border-radius: 11px;
+  background: var(--canvas-ui-soft);
+}
+:root[data-theme] #creative-canvas .cover-card.node-kind-image .canvas-cover > img.canvas-media { object-fit: cover; }
+:root[data-theme] #creative-canvas .cover-card .canvas-simple-cover {
+  padding: 22px;
+  background: var(--canvas-ui-surface);
+}
+:root[data-theme] #creative-canvas .canvas-simple-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  min-height: 100%;
+  gap: 13px;
+  color: var(--canvas-ui-ink);
+}
+:root[data-theme] #creative-canvas .canvas-simple-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--canvas-ui-accent);
+  background: var(--canvas-ui-soft);
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 10px;
+  font-size: 20px;
+}
+:root[data-theme] #creative-canvas .canvas-simple-preview strong { font-size: 15px; font-weight: 600; }
+:root[data-theme] #creative-canvas .canvas-simple-preview p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--canvas-ui-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+:root[data-theme] #creative-canvas .cover-card > .canvas-port {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  z-index: 9;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--canvas-ui-ground);
+  background: var(--canvas-ui-accent);
+  box-shadow: 0 0 0 1px var(--canvas-ui-border);
+}
+
+/* The click-open editor sits below the cover and remains open while it is edited. */
+:root[data-theme] #creative-canvas .cover-card .canvas-hover-details {
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  max-height: var(--details-max-height, 500px);
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-surface);
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 15px;
+  box-shadow: var(--canvas-ui-shadow);
+  backdrop-filter: none;
+  transition: opacity .14s ease, visibility .14s ease;
+}
+:root[data-theme] #creative-canvas .cover-card.details-open .canvas-hover-details {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+:root[data-theme] #creative-canvas .cover-card.dragging .canvas-hover-details,
+:root[data-theme] #creative-canvas #canvas-viewport.connecting .cover-card .canvas-hover-details {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+:root[data-theme] #creative-canvas .canvas-hover-details::before { display: none; }
+:root[data-theme] #creative-canvas .canvas-detail-heading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 47px;
+  padding: 8px 14px 8px 18px;
+  border-bottom: 1px solid var(--canvas-ui-border);
+}
+:root[data-theme] #creative-canvas .canvas-detail-heading > div { display: flex; align-items: baseline; min-width: 0; gap: 10px; }
+:root[data-theme] #creative-canvas .canvas-detail-kicker { color: var(--canvas-ui-muted); font-size: 10px; white-space: nowrap; }
+:root[data-theme] #creative-canvas .canvas-detail-title {
+  min-width: 0;
+  width: min(215px, 28vw);
+  padding: 4px 2px;
+  color: var(--canvas-ui-ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+:root[data-theme] #creative-canvas .canvas-detail-title:hover,
+:root[data-theme] #creative-canvas .canvas-detail-title:focus {
+  border-color: var(--canvas-ui-border);
+  background: var(--canvas-ui-soft);
+  outline: none;
+}
+:root[data-theme] #creative-canvas .canvas-detail-actions { flex: 0 0 auto; align-items: center; gap: 5px; }
+:root[data-theme] #creative-canvas .canvas-detail-actions :is(.canvas-cover-play,.canvas-detail-remove) {
+  width: auto;
+  min-width: 36px;
+  padding: 0 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+:root[data-theme] #creative-canvas .canvas-detail-heading strong {
+  overflow: hidden;
+  color: var(--canvas-ui-ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-theme] #creative-canvas .canvas-detail-heading button {
+  flex: 0 0 27px;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  color: var(--canvas-ui-muted);
+  background: var(--canvas-ui-soft);
+  border-radius: 7px;
+  font-size: 18px;
+}
+:root[data-theme] #creative-canvas .canvas-detail-heading button:hover { color: var(--canvas-ui-accent); }
+:root[data-theme] #creative-canvas .canvas-details-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  padding: 16px 18px 18px;
+  color: var(--canvas-ui-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  scrollbar-color: var(--canvas-ui-border) transparent;
+}
+:root[data-theme] #creative-canvas .canvas-details-content .shot-fields,
+:root[data-theme] #creative-canvas .canvas-details-content.image-details { margin-top: 0; }
+:root[data-theme] #creative-canvas .canvas-details-content .reference-prompt-editor {
+  margin: 0;
+  padding: 0;
+  color: var(--canvas-ui-muted);
+  font-size: 11px;
+}
+:root[data-theme] #creative-canvas .canvas-details-content .reference-prompt-editor textarea {
+  width: 100%;
+  min-height: 92px;
+  margin-top: 8px;
+  padding: 9px 11px;
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-soft);
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+:root[data-theme] #creative-canvas .canvas-details-content .reference-prompt-editor textarea:focus {
+  background: var(--canvas-ui-surface);
+  border-color: var(--canvas-ui-accent);
+  outline-color: var(--canvas-ui-accent);
+}
+:root[data-theme] #creative-canvas .canvas-details-content .prompt-at-hint { color: var(--canvas-ui-muted); }
+:root[data-theme] #creative-canvas .image-prompt-lead { display: block; margin-bottom: 16px; }
+:root[data-theme] #creative-canvas .image-detail-heading { padding-top: 12px; border-top: 1px solid var(--canvas-ui-border); }
+:root[data-theme] #creative-canvas .canvas-details-content .shot-references {
+  background: var(--canvas-ui-soft);
+  border-color: var(--canvas-ui-border);
+}
+:root[data-theme] #creative-canvas .canvas-details-content .shot-references:has(.shot-reference-empty),
+:root[data-theme] #creative-canvas .canvas-details-content .image-inputs:has(> .shot-hint) { display: none; }
+:root[data-theme] #creative-canvas .canvas-details-content .image-control-note,
+:root[data-theme] #creative-canvas .canvas-details-content .image-capability-summary,
+:root[data-theme] #creative-canvas .canvas-details-content .image-detail-heading > span,
+:root[data-theme] #creative-canvas .canvas-details-content .shot-estimate small { display: none; }
+:root[data-theme] #creative-canvas .canvas-details-content .shot-params { padding-top: 4px; }
+:root[data-theme] #creative-canvas .canvas-details-content .shot-estimate,
+:root[data-theme] #creative-canvas .canvas-details-content .shot-hint,
+:root[data-theme] #creative-canvas .canvas-details-content .canvas-media-meta { color: var(--canvas-ui-muted); }
+:root[data-theme] #creative-canvas .canvas-details-content .canvas-node-footer { border-color: var(--canvas-ui-border); }
+:root[data-theme] #creative-canvas .canvas-details-content .canvas-node-footer button,
+:root[data-theme] #creative-canvas .canvas-details-content .canvas-node-footer a { color: var(--canvas-ui-accent); }
+:root[data-theme] #creative-canvas .text-card .canvas-details-content .canvas-note {
+  min-height: 180px;
+  height: 180px;
+  padding: 12px;
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-soft);
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+:root[data-theme] #creative-canvas .text-card .canvas-details-content .canvas-node-footer,
+:root[data-theme] #creative-canvas .guide-card .canvas-details-content .canvas-node-footer {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+:root[data-theme] #creative-canvas .guide-card .canvas-details-content .canvas-guide { min-height: 90px; }
+:root[data-theme] #creative-canvas .node-kind-ai .canvas-details-content .ai-card-content { gap: 12px; }
+:root[data-theme] #creative-canvas .node-kind-ai .canvas-details-content .ai-card-input-summary { display: none; }
+:root[data-theme] #creative-canvas .node-kind-ai .canvas-details-content .ai-card-content label { color: var(--canvas-ui-muted); }
+:root[data-theme] #creative-canvas .node-kind-ai .canvas-details-content .ai-card-content :is(select,textarea) {
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-soft);
+  border-color: var(--canvas-ui-border);
+}
+:root[data-theme] #creative-canvas .speech-cover .canvas-simple-icon { font-size: 20px; }
+:root[data-theme] #creative-canvas .speech-details { display: flex; flex-direction: column; gap: 11px; }
+:root[data-theme] #creative-canvas .speech-details label { display: flex; flex-direction: column; gap: 6px; color: var(--canvas-ui-muted); font-size: 11px; }
+:root[data-theme] #creative-canvas .speech-details :is(textarea,input,select) {
+  width: 100%; min-width: 0; padding: 9px 10px; color: var(--canvas-ui-ink); background: var(--canvas-ui-soft);
+  border: 1px solid var(--canvas-ui-border); border-radius: 8px; font: inherit; font-size: 12px;
+}
+:root[data-theme] #creative-canvas .speech-details textarea { min-height: 102px; resize: vertical; line-height: 1.6; }
+:root[data-theme] #creative-canvas .speech-details :is(textarea,input,select):focus { outline: 2px solid var(--canvas-ui-accent); outline-offset: 1px; }
+:root[data-theme] #creative-canvas .speech-card-meta,
+:root[data-theme] #creative-canvas .speech-card-voice-actions,
+:root[data-theme] #creative-canvas .speech-card-result { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+:root[data-theme] #creative-canvas .speech-card-meta { color: var(--canvas-ui-muted); font-size: 10px; }
+:root[data-theme] #creative-canvas .speech-card-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+:root[data-theme] #creative-canvas .speech-card-voice-actions button { flex: 0 0 auto; }
+:root[data-theme] #creative-canvas .speech-card-voice-actions select { flex: 1 1 auto; }
+:root[data-theme] #creative-canvas .speech-card-options { color: var(--canvas-ui-muted); font-size: 11px; }
+:root[data-theme] #creative-canvas .speech-card-options summary { cursor: pointer; }
+:root[data-theme] #creative-canvas .speech-card-options .speech-card-fields { margin-top: 10px; }
+:root[data-theme] #creative-canvas .speech-card-status { color: var(--canvas-ui-muted); font-size: 11px; line-height: 1.5; }
+:root[data-theme] #creative-canvas .speech-card-result { flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--canvas-ui-border); }
+:root[data-theme] #creative-canvas .speech-card-result audio { flex: 1 1 230px; max-width: 100%; }
+:root[data-theme] #creative-canvas .speech-card-refresh { align-self: flex-end; }
+
+/* A compact composer keeps the prompt and next-generation controls together. */
+:root[data-theme] #creative-canvas .cover-card .canvas-cover { display: flex; flex-direction: column; justify-content: center; align-items: center; }
+:root[data-theme] #creative-canvas .cover-card .shot-preview-empty {
+  flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; gap: 12px; padding: 30px 22px;
+  color: var(--canvas-ui-ink); background: linear-gradient(145deg, var(--canvas-ui-soft), var(--canvas-ui-surface));
+}
+:root[data-theme] #creative-canvas .cover-card .shot-preview-empty span { font-size: 40px; color: var(--canvas-ui-accent); }
+:root[data-theme] #creative-canvas .cover-card .shot-preview-empty strong { font-size: 20px; font-weight: 600; }
+:root[data-theme] #creative-canvas .cover-card .shot-preview-empty p { color: var(--canvas-ui-muted); font-size: 12px; }
+:root[data-theme] #creative-canvas .cover-card.details-open { z-index: 30; }
+:root[data-theme] #creative-canvas .cover-card.dragging { z-index: 40; }
+:root[data-theme] #creative-canvas .canvas-detail-kicker { display: none; }
+:root[data-theme] #creative-canvas .canvas-detail-actions button { flex: 0 0 auto; }
+:root[data-theme] #creative-canvas .canvas-detail-actions .canvas-detail-remove { min-width: 40px; font-size: 11px; }
+:root[data-theme] #creative-canvas .canvas-details-content.canvas-composer { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 14px; }
+:root[data-theme] #creative-canvas .canvas-composer label { margin: 0; }
+:root[data-theme] #creative-canvas .canvas-composer .reference-prompt-editor { display: block; margin: 0; }
+:root[data-theme] #creative-canvas .canvas-composer .canvas-prompt-label,
+:root[data-theme] #creative-canvas .canvas-composer .canvas-option-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+:root[data-theme] #creative-canvas .canvas-composer :is(.reference-prompt-editor,.speech-card-prompt) textarea {
+  width: 100%; min-height: 96px; margin: 0; padding: 4px 0; border: 0; border-radius: 0; outline: none; resize: vertical;
+  color: var(--canvas-ui-ink); background: transparent; font-size: 13px; line-height: 1.7; box-shadow: none;
+}
+:root[data-theme] #creative-canvas .canvas-composer :is(.reference-prompt-editor,.speech-card-prompt) textarea:focus { outline: none; border: 0; background: transparent; }
+:root[data-theme] #creative-canvas .canvas-composer .prompt-at-hint { float: none; display: none; }
+:root[data-theme] #creative-canvas .canvas-composer .reference-prompt-editor:focus-within .prompt-at-hint { display: block; margin-bottom: 4px; }
+:root[data-theme] #creative-canvas .canvas-composer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+:root[data-theme] #creative-canvas .canvas-composer-controls { display: flex; align-items: center; flex-wrap: wrap; flex: 1 1 340px; min-width: 0; gap: 4px; padding: 0; margin: 0; }
+:root[data-theme] #creative-canvas .canvas-composer-controls > label { display: flex; flex-direction: column; flex: 0 1 66px; min-width: 0; padding: 0; }
+:root[data-theme] #creative-canvas .canvas-composer-controls > label:first-child { flex: 1 1 130px; }
+:root[data-theme] #creative-canvas .canvas-composer-controls :is(select,input) {
+  width: 100%; min-width: 0; min-height: 32px; margin: 0; padding: 5px 3px; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--canvas-ui-ink); font-size: 11px; font-weight: 500; line-height: 1.4; text-overflow: ellipsis;
+}
+:root[data-theme] #creative-canvas .canvas-composer-controls :is(select,input):hover { background: var(--canvas-ui-soft); }
+:root[data-theme] #creative-canvas .canvas-composer-controls :is(select,input):focus { border-color: var(--canvas-ui-border); background: var(--canvas-ui-soft); outline: 1px solid var(--canvas-ui-accent); }
+:root[data-theme] #creative-canvas .canvas-composer-controls option { color: var(--canvas-ui-ink); background: var(--canvas-ui-surface); }
+:root[data-theme] #creative-canvas .canvas-composer-cost { flex: 0 1 100px; min-width: 0; margin-left: auto; padding: 0; font-size: 11px; line-height: 1.5; }
+:root[data-theme] #creative-canvas .canvas-composer-cost :is(strong,span) { color: var(--canvas-ui-muted); font-size: 11px; font-weight: 400; }
+:root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit {
+  display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0;
+  border: 0; border-radius: 50%; font-size: 0; background: var(--canvas-ui-ink); color: var(--canvas-ui-surface); box-shadow: none;
+}
+:root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit::after { content: '\2191'; font-size: 21px; line-height: 1; }
+:root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit:hover { background: var(--canvas-ui-accent); }
+:root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit:disabled { opacity: .38; cursor: not-allowed; }
+:root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit:focus-visible { outline: 2px solid var(--canvas-ui-accent); outline-offset: 3px; }
+:root[data-theme] #creative-canvas .canvas-composer .shot-hint { margin: 0; font-size: 10px; line-height: 1.5; }
+:root[data-theme] #creative-canvas .canvas-composer-more { color: var(--canvas-ui-muted); font-size: 11px; }
+:root[data-theme] #creative-canvas .canvas-composer-more summary { width: fit-content; cursor: pointer; padding: 3px 0; }
+:root[data-theme] #creative-canvas .canvas-composer-more > :not(summary) { margin-top: 9px; }
+:root[data-theme] #creative-canvas .canvas-composer-more > label { display: flex; align-items: center; gap: 10px; }
+:root[data-theme] #creative-canvas .canvas-composer-more > label select { max-width: 180px; padding: 7px 9px; color: var(--canvas-ui-ink); background: var(--canvas-ui-soft); border: 1px solid var(--canvas-ui-border); border-radius: 7px; }
+:root[data-theme] #creative-canvas .speech-card-model-voice { flex-basis: 310px; }
+:root[data-theme] #creative-canvas .speech-card-model-voice > label:last-child { flex: 1 1 140px; }
+:root[data-theme] #creative-canvas .speech-card-count { color: var(--canvas-ui-muted); font-size: 10px; }
+:root[data-theme] #creative-canvas .speech-card-connect { align-self: flex-start; padding: 0; font-size: 11px; }
+:root[data-theme] #creative-canvas .speech-card-options .speech-card-fields { margin-top: 10px; }
+:root[data-theme] #creative-canvas .canvas-composer :is(.image-job-status,.speech-card-status) { margin: 0; padding: 8px 10px; color: var(--canvas-ui-muted); background: var(--canvas-ui-soft); border: 1px solid var(--canvas-ui-border); border-radius: 8px; }
+:root[data-theme] #creative-canvas .canvas-composer :is(.canvas-node-footer,.image-output-actions) { flex-wrap: wrap; gap: 8px 12px; }
+
+/* The optional assistant uses the same quiet side-panel treatment. */
+:root[data-theme] #creative-canvas .canvas-text-panel {
+  padding: 14px 15px 15px 18px;
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-surface);
+  border-left: 1px solid var(--canvas-ui-border);
+}
+:root[data-theme] #creative-canvas .canvas-text-panel-heading { border-color: var(--canvas-ui-border); }
+:root[data-theme] #creative-canvas .canvas-text-panel-heading h2 { color: var(--canvas-ui-ink); font-size: 13px; }
+:root[data-theme] #creative-canvas .canvas-text-panel-actions button {
+  color: var(--canvas-ui-muted);
+  background: var(--canvas-ui-soft);
+  border-color: var(--canvas-ui-border);
+}
+:root[data-theme] #creative-canvas #canvas-text-host .text-chat-card { background: transparent; }
+
+@media (max-width: 700px) {
+  :root[data-theme] #creative-canvas .canvas-controls { bottom: 55px; left: 9px; }
+  :root[data-theme] #creative-canvas .canvas-workspace > .canvas-bottom-bar { left: 9px; bottom: 9px; }
+  :root[data-theme] #creative-canvas .canvas-workspace > .canvas-creation-toolbar { left: 8px; width: 40px; }
+  :root[data-theme] #creative-canvas .canvas-details-content { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme] #creative-canvas .cover-card .canvas-hover-details { transition: none; }
+}
+
+/* Every empty or text-based cover uses the same quiet frosted surface. */
+:root[data-theme="night"] #creative-canvas {
+  --canvas-frost-fill: #282c30c4;
+  --canvas-frost-light: #f0f5ff14;
+  --canvas-frost-shade: #10121624;
+  --canvas-frost-edge: #c9d2dd27;
+  --canvas-frost-sheen: #ffffff16;
+  --canvas-frost-ink: #e3e8ee;
+  --canvas-frost-icon: #adb9c8;
+  --canvas-frost-grain: .075;
+}
+:root[data-theme="day"] #creative-canvas {
+  --canvas-frost-fill: #ffffffbe;
+  --canvas-frost-light: #ffffffc2;
+  --canvas-frost-shade: #dce4ed38;
+  --canvas-frost-edge: #a6b5c445;
+  --canvas-frost-sheen: #ffffffdf;
+  --canvas-frost-ink: #354453;
+  --canvas-frost-icon: #728497;
+  --canvas-frost-grain: .11;
+}
+:root[data-theme] #creative-canvas .cover-card:has(.canvas-frosted-placeholder) {
+  border-color: var(--canvas-frost-edge);
+  box-shadow: 0 7px 24px #00000012;
+}
+:root[data-theme] #creative-canvas .cover-card:has(.canvas-frosted-placeholder):is(.selected,.details-open) {
+  border-color: var(--canvas-ui-selection);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas-ui-selection) 25%, transparent), 0 10px 28px #0000001a;
+}
+:root[data-theme] #creative-canvas .cover-card .canvas-cover:has(> .canvas-frosted-placeholder) {
+  display: flex;
+  padding: 0;
+  background: transparent;
+}
+:root[data-theme] #creative-canvas .cover-card .canvas-frosted-placeholder {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 18px;
+  padding: 26px;
+  overflow: hidden;
+  border-radius: inherit;
+  color: var(--canvas-frost-ink);
+  background-color: var(--canvas-frost-fill);
+  background-image: radial-gradient(ellipse at 16% 0%, var(--canvas-frost-light), transparent 72%),
+    linear-gradient(145deg, transparent 30%, var(--canvas-frost-shade));
+  box-shadow: inset 0 1px 0 var(--canvas-frost-sheen), inset 0 0 32px var(--canvas-frost-sheen);
+  backdrop-filter: blur(20px) saturate(.7);
+  -webkit-backdrop-filter: blur(20px) saturate(.7);
+}
+:root[data-theme] #creative-canvas .canvas-frosted-placeholder::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--canvas-frost-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='grain'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch' seed='8'/%3E%3C/filter%3E%3Cpath fill='%23808080' filter='url(%23grain)' d='M0 0h160v160H0z'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  mix-blend-mode: soft-light;
+}
+:root[data-theme] #creative-canvas .canvas-frosted-placeholder .canvas-frosted-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  color: var(--canvas-frost-icon);
+  font-size: 36px;
+  line-height: 1;
+}
+:root[data-theme] #creative-canvas .canvas-frosted-icon svg { display: block; width: 38px; height: 38px; stroke-width: 1.5; }
+:root[data-theme] #creative-canvas .canvas-frosted-placeholder > strong {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--canvas-frost-ink);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: .035em;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

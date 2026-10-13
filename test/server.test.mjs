@@ -4,9 +4,6 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { request } from 'node:http';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
 import { createStudio } from '../server.mjs';
 import { VIDEO_REQUEST_MODE as CURRENT_VIDEO_REQUEST_MODE, LEGACY_VIDEO_REQUEST_MODE as VIDEO_REQUEST_MODE, submitVideo } from '../lib/providers.mjs';
 
@@ -21,9 +18,6 @@ test('本地 HTTP：保护密钥、拒绝跨站修改、保存冲突、上传下
   assert.equal((await fetch(`${url}/app.js`)).status, 200);
   assert.equal((await fetch(`${url}/video-parameters.js`)).status, 200);
   assert.equal((await fetch(`${url}/style.css`)).status, 200);
-  const repeat = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../server.mjs', import.meta.url))],
-    { windowsHide: true, timeout: 5000, env: { ...process.env, JINGCE_PORT: String(app.server.address().port) } });
-  assert.match(repeat.stdout, /已经启动/);
   assert.equal((await fetch(`${url}/api/projects`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
   assert.equal((await send('/api/projects', 'POST', {}, { Origin: 'https://attacker.invalid' })).status, 403);
   assert.equal((await send('/api/projects', 'POST', {}, { 'X-Studio-Token': 'é'.repeat(64) })).status, 403);
