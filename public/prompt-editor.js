@@ -40,10 +40,13 @@ function replacementEdit(capture, before, after) {
   return edit?.text === '' ? edit : undefined;
 }
 
+const matchesReferenceQuery = (reference, label, query) => !query || label.toLocaleLowerCase().includes(query)
+  || String(reference.name || '').toLocaleLowerCase().includes(query);
+
 // Both the canvas card and the scene form use this controller.
 export function createReferencePromptEditor({ container, getReferences, onInsert, onHighlight = () => {} }) {
   const sessions = new WeakMap(), composing = new WeakSet(), pendingEdits = new WeakMap(), compositionEdits = new WeakMap();
-  const activeHighlights = new WeakMap();
+  const activeHighlights = new WeakMap(), insertedSelections = new WeakMap();
   let serial = 0;
   const isPrompt = target => Boolean(target?.matches?.('textarea[data-reference-prompt]'));
   const menuFor = control => control.closest('.reference-prompt-editor')?.querySelector('.reference-mention-menu');
@@ -77,23 +80,35 @@ export function createReferencePromptEditor({ container, getReferences, onInsert
     }
     setHighlight(control, session.items[session.active]?.reference || null);
   }
+  function positionMenu(control, menu) {
+    const wrapper = control.closest('.reference-prompt-editor'), panel = control.closest('.canvas-details-content');
+    if (!panel || !menu.style || !wrapper?.getBoundingClientRect) return;
+    const bounds = wrapper.getBoundingClientRect(), available = panel.getBoundingClientRect();
+    const scale = bounds.width / (wrapper.offsetWidth || bounds.width) || 1;
+    const below = (available.bottom - bounds.bottom - 10) / scale;
+    const overlay = below < 80;
+    const visibleHeight = (Math.min(bounds.bottom, available.bottom) - Math.max(bounds.top, available.top)) / scale - 12;
+    menu.dataset.placement = overlay ? 'overlay' : 'below';
+    menu.style.setProperty('--reference-menu-max-height', Math.max(48, Math.min(160, overlay ? visibleHeight : below)) + 'px');
+    menu.style.setProperty('--reference-menu-bottom', Math.max(6, (bounds.bottom - available.bottom) / scale + 6) + 'px');
+  }
   function refresh(control) {
     if (!isPrompt(control) || composing.has(control)) return;
     const menu = menuFor(control); if (!menu) return;
     const range = mentionQuery(control.value, control.selectionStart, control.selectionEnd);
     if (!range) { close(control); return; }
     const references = getReferences(control), items = references.map((reference, index) => ({ reference, label: referenceLabel(references,index) }))
-      .filter(item => !range.query || item.label.toLocaleLowerCase().includes(range.query) || String(item.reference.name || '').toLocaleLowerCase().includes(range.query));
+      .filter(item => matchesReferenceQuery(item.reference, item.label, range.query));
     const id = menu.id || (menu.id = 'reference-mentions-' + ++serial);
     control.setAttribute('aria-controls', id); control.setAttribute('aria-autocomplete', 'list'); control.setAttribute('aria-expanded', 'true');
     const previousKey = sessions.get(control)?.items[sessions.get(control)?.active]?.reference;
     const previousIndex = items.findIndex(item => previousKey && referenceKey(item.reference) === referenceKey(previousKey));
     const active = previousIndex >= 0 && items[previousIndex].reference.assetId ? previousIndex : items.findIndex(item => item.reference.assetId);
     const session = { range, items, active }; sessions.set(control, session);
-    menu.innerHTML = items.length ? '<div class="reference-mention-heading">选择参考素材 · ↑↓ 选择，Enter 插入</div>' + items.map((item,index) =>
+    menu.innerHTML = items.length ? '<div class="reference-mention-heading">插入引用 · ↑↓ 选择，Enter 确认</div>' + items.map((item,index) =>
       '<button type="button" role="option" tabindex="-1" id="' + id + '-' + index + '" data-mention-index="' + index + '" data-reference-key="' + escapeHtml(referenceKey(item.reference)) + '"' + (item.reference.assetId ? '' : ' disabled') + '><span class="reference-mention-icon">' + (({image:'▧',video:'▷',audio:'♫'}[item.reference.kind])) + '</span><span><strong>@' + escapeHtml(item.label) + '</strong><small>' + escapeHtml(item.reference.name || '未命名素材') + (item.reference.assetId ? '' : ' · 待补选') + '</small></span></button>').join('')
       : '<p class="reference-mention-empty">' + (references.length ? '没有匹配素材，可输入“图片”、“视频”或“音频”。' : '先为当前生成项添加参考素材，再输入 @ 选择。') + '</p>';
-    menu.hidden = false; highlight(control,session);
+    menu.hidden = false; positionMenu(control,menu); highlight(control,session);
   }
   function currentSession(control) {
     const current = mentionQuery(control.value, control.selectionStart, control.selectionEnd), previous = sessions.get(control);
@@ -122,15 +137,23 @@ export function createReferencePromptEditor({ container, getReferences, onInsert
     return edit;
   }
   function insert(control, reference, range) {
-    const available = getReferences(control).find(item => referenceKey(item) === referenceKey(reference));
+    const references = getReferences(control);
+    const available = references.find(item => referenceKey(item) === referenceKey(reference));
     if (!available?.assetId) return false;
-    const selected = range || { start: control.selectionStart ?? control.value.length, end: control.selectionEnd ?? control.value.length };
+    const query = mentionQuery(control.value, control.selectionStart, control.selectionEnd);
+    const pendingRange = query && references.some((item, index) => matchesReferenceQuery(item, referenceLabel(references,index), query.query)) ? query : null;
+    const selected = range || pendingRange || { start: control.selectionStart ?? control.value.length, end: control.selectionEnd ?? control.value.length };
     const inserted = onInsert(control, available, selected);
-    if (inserted !== false) { close(control); control.focus({ preventScroll: true }); return true; }
+    if (inserted !== false) {
+      insertedSelections.set(control, { value: control.value, start: control.selectionStart, end: control.selectionEnd });
+      close(control); control.focus({ preventScroll: true }); return true;
+    }
     return false;
   }
   container.addEventListener('beforeinput', captureEdit);
-  container.addEventListener('input', event => { if (isPrompt(event.target) && !event.isComposing) refresh(event.target); });
+  container.addEventListener('input', event => { if (isPrompt(event.target) && !event.isComposing) {
+    insertedSelections.delete(event.target); refresh(event.target);
+  } });
   container.addEventListener('compositionstart', event => { if (isPrompt(event.target)) {
     const control = event.target; composing.add(control); pendingEdits.delete(control);
     compositionEdits.set(control, { before: control.value, start: control.selectionStart, end: control.selectionEnd }); close(control);
@@ -140,7 +163,7 @@ export function createReferencePromptEditor({ container, getReferences, onInsert
     if (document.activeElement === event.target) refresh(event.target); else close(event.target);
   } });
   container.addEventListener('click', event => {
-    if (isPrompt(event.target)) { refresh(event.target); return; }
+    if (isPrompt(event.target)) { insertedSelections.delete(event.target); refresh(event.target); return; }
     const option = event.target.closest?.('[data-mention-index]'); if (!option || option.disabled) return;
     const control = option.closest('.reference-prompt-editor')?.querySelector('textarea[data-reference-prompt]');
     const item = sessions.get(control)?.items[Number(option.dataset.mentionIndex)], session = control && currentSession(control);
@@ -156,7 +179,12 @@ export function createReferencePromptEditor({ container, getReferences, onInsert
   container.addEventListener('pointerout', event => {
     if (isPrompt(event.target) && !isPrompt(event.relatedTarget)) setHighlight(event.target, null);
   });
-  container.addEventListener('select', event => { if (isPrompt(event.target)) refresh(event.target); });
+  container.addEventListener('select', event => {
+    const control = event.target; if (!isPrompt(control)) return;
+    const inserted = insertedSelections.get(control);
+    if (inserted && inserted.value === control.value && inserted.start === control.selectionStart && inserted.end === control.selectionEnd) return;
+    insertedSelections.delete(control); refresh(control);
+  });
   container.addEventListener('keyup', event => {
     if (isPrompt(event.target) && (['ArrowLeft','ArrowRight','Home','End','PageUp','PageDown'].includes(event.key)
       || (event.key?.toLowerCase() === 'a' && (event.ctrlKey || event.metaKey)))) refresh(event.target);

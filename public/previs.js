@@ -11,10 +11,43 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
   const scopedStorageKey = key => globalThis.__jingceUserId ? `jingce-user:${globalThis.__jingceUserId}:${key}` : key;
   const origin = globalThis.location?.origin || 'http://127.0.0.1';
   const localPage = ['127.0.0.1', 'localhost', '[::1]'].includes(globalThis.location?.hostname || '127.0.0.1');
-  let projectId = '', jobs = [], tools = null, loading = false, busy = false, sceneVersion = 0, helperToken = '', jobMarkup = '';
+  let projectId = '', previsProjectId = 'default', jobs = [], tools = null, loading = false, busy = false, sceneVersion = 0, helperToken = '', jobMarkup = '';
   let chatHistory = [], chatVersions = [], chatProposal = null, chatSource = null, sceneEstablished = false;
   const draftCache = new Map(), pendingChatRequests = new Set();
   const saving = new Set();
+  const previsProjects = () => getState().project?.previsProjects?.length ? getState().project.previsProjects : [{ id: 'default', title: '预演工程 1' }];
+  const currentDraftId = () => projectId ? projectId + (previsProjectId === 'default' ? '' : ':' + previsProjectId) : '';
+  function rememberSelection() {
+    try { storage?.setItem(scopedStorageKey('jingce-previs-project:' + projectId), previsProjectId); } catch {}
+  }
+  function renderProjectControls() {
+    const picker = $('#previs-project-select');
+    if (picker) {
+      picker.innerHTML = previsProjects().map(project => `<option value="${escape(project.id)}">${escape(project.title)}</option>`).join('');
+      picker.value = previsProjectId; picker.disabled = busy || !projectId;
+    }
+    for (const id of ['previs-new-project', 'previs-new-submit']) if ($('#' + id)) $('#' + id).disabled = busy || !projectId;
+    const parent = $('#previs-parent-project');
+    if (parent) parent.textContent = projectId ? `所属创作工程：${getState().project?.title || '未命名工程'}` : '';
+  }
+  function selectPrevisProject(id) {
+    if (!previsProjects().some(project => project.id === id)) throw new Error('找不到当前创作工程中的这个预演工程。');
+    if (id !== previsProjectId) {
+      saveDraft(); previsProjectId = id; jobMarkup = ''; restoreDraft(); message(); chatMessage(); renderJobs(true);
+    }
+    rememberSelection(); renderProjectControls();
+  }
+  async function createPrevisProject() {
+    const id = projectId, title = $('#previs-new-title').value.trim();
+    if (!id) throw new Error('请先新建或选择一个创作工程。');
+    if (!title) throw new Error('请填写预演工程名称。');
+    saveDraft(); await flush();
+    if (id !== getState().project?.id) throw new Error('创作工程已切换，请在当前创作工程重新新建预演工程。');
+    const project = await api(`/api/projects/${id}/previs-projects`, 'POST', { title });
+    await onProjectUpdate(project);
+    $('#previs-new-dialog').close();
+    if (id === getState().project?.id) { selectPrevisProject(project.previsProjects.at(-1).id); toast('已在当前创作工程内新建预演工程。'); }
+  }
   function loadHelperToken() { try { helperToken = storage?.getItem(scopedStorageKey('jingce-blender-helper-token')) || ''; } catch { /* The current page can still pair. */ } }
   const useHelper = () => !localPage || Boolean($('#previs-use-helper')?.checked);
   const message = (text = '', error = false) => { const element = $('#previs-message'); if (element) { element.textContent = text; element.classList.toggle('error', error); } };
@@ -40,11 +73,11 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
   }
   function saveDraft() {
     if (!projectId) return;
-    persistDraft(projectId, { story: $('#previs-story').value, json: jsonValue(), chatInput: $('#previs-chat-input').value,
+    persistDraft(currentDraftId(), { story: $('#previs-story').value, json: jsonValue(), chatInput: $('#previs-chat-input').value,
       chatHistory: chatHistory.slice(-24), chatVersions: chatVersions.slice(-20), chatProposal, chatSource, sceneEstablished, preferences: preferences() });
   }
   function restoreDraft() {
-    const draft = storedDraft(projectId);
+    const draft = storedDraft(currentDraftId());
     $('#previs-story').value = draft?.story || '';
     $('#previs-spec').value = typeof draft.json === 'string' ? draft.json : JSON.stringify(defaultPrevisSpec(), null, 2);
     $('#previs-chat-input').value = draft?.chatInput || '';
@@ -87,14 +120,14 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
   }
   function renderChat() {
     const source = $('#previs-chat-source');
-    source.textContent = chatSource ? `当前修改起点：${chatSource.name}（预演任务 ${chatSource.id.slice(0, 8)}）`
-      : sceneEstablished ? `当前场景：${$('#previs-summary').textContent.split(' · ')[0] || '场景编辑框'}。可继续修改，也可选择右侧预演结果。`
-      : '从一句故事开始：描述人物、空间与镜头，助手会在这里整理场景。';
+    source.textContent = chatSource ? `当前修改：${chatSource.name}`
+      : sceneEstablished ? `当前场景：${$('#previs-summary').textContent.split(' · ')[0] || '场景编辑框'}` : '';
+    source.hidden = !source.textContent;
     const host = $('#previs-chat-history');
     host.innerHTML = chatHistory.length ? chatHistory.map(item => item.role === 'context'
       ? `<p class="previs-chat-empty">${escape(item.content)}</p>`
       : `<div class="previs-chat-message ${item.role}${item.failed ? ' failed' : ''}"><strong>${item.role === 'user' ? '你' : '导演助手'}</strong><br>${escape(item.content)}${item.raw ? `<details class="previs-chat-raw"><summary>查看未通过检查的原始回复</summary><pre>${escape(item.raw)}</pre></details>` : ''}${item.failed ? '<small>未收到本次回复，不会自动重新发送。</small>' : item.pending ? '<small>等待语言模型回复…</small>' : ''}</div>`).join('')
-      : '<p class="previs-chat-empty">直接讲一个故事，让助手整理人物、道具和镜头。之后可继续讨论、修改预演或修复场景 JSON。</p>';
+      : '<p class="previs-chat-empty">开始你的故事创作</p>';
     host.scrollTop = host.scrollHeight;
     const proposal = $('#previs-chat-proposal'); proposal.hidden = !chatProposal;
     if (chatProposal) {
@@ -115,7 +148,7 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
     renderChatControls();
   }
   async function revise() {
-    const id = getState().project?.id, model = $('#previs-text-model').value;
+    const id = getState().project?.id, draftId = currentDraftId(), model = $('#previs-text-model').value;
     const feedback = $('#previs-chat-input').value.trim();
     if (!id) throw new Error('请先新建或选择一个工程。');
     if (!feedback) throw new Error('请先输入故事、问题或修改要求。');
@@ -136,8 +169,8 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
     try {
       const response = await api('/api/text-chat', 'POST', { model, projectId: id, messages });
       const result = parsePrevisRevision(response.content);
-      if (id === projectId) saveDraft();
-      const draft = storedDraft(id), history = Array.isArray(draft.chatHistory) ? draft.chatHistory : [];
+      if (draftId === currentDraftId()) saveDraft();
+      const draft = storedDraft(draftId), history = Array.isArray(draft.chatHistory) ? draft.chatHistory : [];
       const sent = history.find(item => item.requestId === requestId);
       if (sent) { delete sent.pending; delete sent.failed; }
       history.push({ role: 'assistant', content: result.reply.slice(0, 20000),
@@ -149,18 +182,18 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
       draft.chatHistory = history.slice(-24);
       if (result.spec) draft.chatProposal = { json: JSON.stringify(result.spec, null, 2), baseJson,
         signature, source: sourceName, requestId };
-      persistDraft(id, draft);
-      if (id === projectId) {
+      persistDraft(draftId, draft);
+      if (draftId === currentDraftId()) {
         chatHistory = draft.chatHistory; chatProposal = draft.chatProposal || null; renderChat();
         chatMessage(result.error || (result.spec ? '场景方案已生成。查看后点击“应用到场景编辑框”，也可以继续聊天完善方案。' : '已收到回复。可以继续讨论或提出下一轮修改。'), Boolean(result.error));
       }
     } catch (error) {
-      if (id === projectId) saveDraft();
-      const draft = storedDraft(id), sent = draft.chatHistory?.find(item => item.requestId === requestId);
+      if (draftId === currentDraftId()) saveDraft();
+      const draft = storedDraft(draftId), sent = draft.chatHistory?.find(item => item.requestId === requestId);
       if (sent) { delete sent.pending; sent.failed = true; }
       if (!draft.chatInput) draft.chatInput = feedback;
-      persistDraft(id, draft);
-      if (id === projectId) {
+      persistDraft(draftId, draft);
+      if (draftId === currentDraftId()) {
         chatHistory = draft.chatHistory || chatHistory;
         if (!$('#previs-chat-input').value.trim()) $('#previs-chat-input').value = draft.chatInput;
         renderChat(); chatMessage(error.message, true);
@@ -192,6 +225,7 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
     return raw ? response : response.json();
   }
   function renderTools() {
+    renderProjectControls();
     $('#previs-helper-panel').hidden = !useHelper(); $('#previs-direct-tools').hidden = useHelper();
     const status = $('#previs-tool-status');
     status.textContent = tools ? `${tools.blender.version || 'Blender 未连接'} · ${tools.blender.message} ${tools.ffmpeg.message}`
@@ -251,15 +285,15 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
   }
   async function start() {
     const id = getState().project?.id; if (!id) throw new Error('请先新建或选择一个工程。');
-    const spec = summary(); saveDraft(); await flush();
-    if (id !== getState().project?.id) throw new Error('工程已切换，请在当前工程重新预演。');
+    const draftId = currentDraftId(), workspaceId = previsProjectId, spec = summary(); saveDraft(); await flush();
+    if (id !== getState().project?.id || draftId !== currentDraftId()) throw new Error('预演工程已切换，请在当前预演工程重新预演。');
     let operationId;
-    try { operationId = storage?.getItem(scopedStorageKey('jingce-previs-operation:' + id)); } catch {}
+    try { operationId = storage?.getItem(scopedStorageKey('jingce-previs-operation:' + draftId)); } catch {}
     operationId ||= crypto.randomUUID();
-    try { storage?.setItem(scopedStorageKey('jingce-previs-operation:' + id), operationId); } catch {}
+    try { storage?.setItem(scopedStorageKey('jingce-previs-operation:' + draftId), operationId); } catch {}
     // Retrying a lost response returns the original stored specification and task.
-    const job = await api(`/api/projects/${id}/previs-jobs`, 'POST', { spec, operationId, mode: useHelper() ? 'helper' : 'server' });
-    try { storage?.removeItem(scopedStorageKey('jingce-previs-operation:' + id)); } catch {}
+    const job = await api(`/api/projects/${id}/previs-jobs`, 'POST', { spec, operationId, previsProjectId: workspaceId, mode: useHelper() ? 'helper' : 'server' });
+    try { storage?.removeItem(scopedStorageKey('jingce-previs-operation:' + draftId)); } catch {}
     if (job.mode === 'helper' && !['done', 'failed', 'cancelled'].includes(job.state)) await beginLocal(job);
     message('预演任务已保存。完成后会生成 MP4、Blender 工程、关键帧和俯视路线图。');
     await refresh();
@@ -310,23 +344,39 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
   }
   function renderJobs(force = false) {
     const host = $('#previs-job-list'); if (!host) return;
-    const markup = jobs.filter(job => !getState().project?.assets.some(asset => asset.id === job.videoAssetId && asset.deletedAt)).map(job => {
+    const markup = jobs.filter(job => (job.previsProjectId || 'default') === previsProjectId && !getState().project?.assets.some(asset => asset.id === job.videoAssetId && asset.deletedAt)).map(job => {
       const done = job.state === 'done', route = `/api/previs-jobs/${job.id}`;
       return `<article class="previs-job" data-previs-job="${job.id}"><div class="previs-job-heading"><strong>${escape(job.spec.name)}</strong><span class="previs-state ${done ? 'done' : ''}">${escape(labels[job.state] || job.state)}</span></div><p>${escape(job.message)}</p>${!done ? `<progress value="${Number(job.progress) || 0}" max="1" aria-label="预演进度"></progress>` : ''}
         ${done ? `<button type="button" class="previs-video-preview" data-previs-preview-video="${job.id}" aria-label="播放${escape(job.spec.name)}预演"><img src="${route}/artifacts/video?thumbnail=1" alt="${escape(job.spec.name)}预演缩略图" loading="lazy"><span aria-hidden="true">▶</span></button><p class="previs-meta">${job.report.duration} 秒 · ${job.report.width}×${job.report.height} · ${job.report.fps} fps · 已完整解码 ${job.report.decodedFrames} 帧</p>` : ''}
         <div class="previs-job-actions">${done ? `<a class="button" href="${route}/artifacts/video?download=1">下载 MP4</a><button type="button" class="button project-danger" data-previs-action="delete" data-job-id="${job.id}">删除白模视频</button><a class="button" href="${route}/artifacts/blend?download=1">下载 Blender 工程</a><button type="button" class="button" data-previs-action="place" data-job-id="${job.id}">放到画布</button><button type="button" class="primary" data-previs-action="reference" data-job-id="${job.id}">用于视频参考</button>` : activeStates.has(job.state) ? `<button type="button" class="button" data-previs-action="cancel" data-job-id="${job.id}">取消预演</button>` : `<button type="button" class="button" data-previs-action="retry" data-job-id="${job.id}">重试原预演</button>`}
         <button type="button" class="button" data-previs-action="discuss" data-job-id="${job.id}">对话修改</button><button type="button" class="button" data-previs-action="edit" data-job-id="${job.id}">复制场景继续编辑</button>${done ? `<button type="button" class="button" data-previs-action="open" data-job-id="${job.id}">在 Blender 中打开</button>` : ''}</div>
         <details><summary>配置与输出文件</summary><div class="previs-artifact-links">${job.artifacts.filter(item => done || ['spec', 'prompt'].includes(item.key)).map(item => `<a href="${route}/artifacts/${item.key}?download=1">${escape(item.name)}</a>`).join('')}</div>${done ? `<a class="previs-overview-preview" href="${route}/artifacts/overview" target="_blank" rel="noopener" aria-label="放大查看俯视路线图"><img src="${route}/artifacts/overview?thumbnail=1" alt="俯视路线图" loading="lazy"></a>` : ''}</details></article>`;
-    }).join('') || '<p class="previs-empty">暂无预演任务。先整理场景，再确认并开始预演。</p>';
+    }).join('') || '<p class="previs-empty">暂无预演任务</p>';
     if (markup === jobMarkup) return;
     if (!force && [...host.querySelectorAll('video')].some(video => !video.paused && !video.ended)) return;
     jobMarkup = markup; host.innerHTML = markup;
   }
   function render() {
-    const id = getState().project?.id || '';
-    if (id !== projectId) { saveDraft(); projectId = id; jobs = []; jobMarkup = ''; restoreDraft(); message(); chatMessage(); renderJobs(true); }
+    const state = getState(), id = state.project?.id || '';
+    if (id !== projectId) {
+      saveDraft(); projectId = id;
+      let selected; try { selected = storage?.getItem(scopedStorageKey('jingce-previs-project:' + id)); } catch {}
+      previsProjectId = previsProjects().find(project => project.id === selected)?.id || previsProjects()[0].id;
+      jobs = []; jobMarkup = ''; restoreDraft(); message(); chatMessage(); renderJobs(true);
+    }
     renderTools();
   }
+  $('#previs-new-project')?.addEventListener('click', () => {
+    if (busy || !projectId) return;
+    $('#previs-new-form').reset(); $('#previs-new-title').value = `预演工程 ${previsProjects().length + 1}`;
+    $('#previs-new-dialog').showModal(); $('#previs-new-title').focus();
+  });
+  $('#previs-new-close')?.addEventListener('click', () => $('#previs-new-dialog').close());
+  $('#previs-new-form')?.addEventListener('submit', event => { event.preventDefault(); work(createPrevisProject); });
+  $('#previs-project-select')?.addEventListener('change', () => {
+    if (busy) { renderProjectControls(); return; }
+    try { selectPrevisProject($('#previs-project-select').value); } catch (error) { renderProjectControls(); toast(error.message, true); }
+  });
   $('#previs-spec')?.addEventListener('input', () => { sceneEstablished = true; sceneVersion++; saveDraft(); summary(false); renderChat(); });
   $('#previs-story')?.addEventListener('input', () => { saveDraft(); renderChat(); });
   $('#previs-chat-input')?.addEventListener('input', () => { saveDraft(); renderChatControls(); });

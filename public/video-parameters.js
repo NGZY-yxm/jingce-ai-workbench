@@ -8,7 +8,7 @@ export function videoParameters(model, scene = {}, maxCount = 5) {
   const tiers = (model?.tiers || []).filter(validTier).map(tier => ({
     duration: Number(tier.duration), resolution: String(tier.resolution), price: tier.price === null ? null : Number(tier.price),
   }));
-  const resolutions = [...new Set(tiers.map(tier => tier.resolution))];
+  const resolutions = [...new Set([...(model?.capabilities?.resolutions || []), ...tiers.map(tier => tier.resolution)])];
   const preferredResolution = typeof scene.resolution === 'string' && resolutions.includes(scene.resolution)
     ? scene.resolution : resolutions.includes(model?.defaultResolution) ? model.defaultResolution : resolutions[0] || '';
   const selectedTiers = tiers.filter(tier => tier.resolution === preferredResolution);
@@ -23,7 +23,8 @@ export function videoParameters(model, scene = {}, maxCount = 5) {
   const ratios = [...new Set((model?.ratios || []).filter(value => typeof value === 'string' && value.trim()))];
   const ratio = ratios.includes(scene.ratio) ? scene.ratio
     : ratios.includes(scene.projectRatio) ? scene.projectRatio : ratios[0] || scene.ratio || scene.projectRatio || '';
-  return { model, resolution: preferredResolution, resolutions, ratio, ratios, duration, tier, count, durations,
+  const issue = model && !tier ? '该模型的生成时长或分辨率尚未确认，请打开“模型能力”补充平台支持的参数。' : '';
+  return { model, issue, resolution: preferredResolution, resolutions, ratio, ratios, duration, tier, count, durations,
     totalEstimate: tier && tier.price !== null ? Number((tier.price * count).toFixed(6)) : null };
 }
 
@@ -39,28 +40,28 @@ export function videoParameterControls(p, catalog = [], maxCount = 5, submitting
     ratio: { label: '画面比例', value: p.ratio || '', disabled: submitting || !p.ratios.length,
       options: p.ratios.length ? choices(p.ratios) : [{ value: p.ratio || '', label: p.ratio ? `${p.ratio}（模型未声明可选比例）` : '模型未声明画面比例' }] },
     generationDuration: { label: '生成时长', value: p.duration || '', disabled: submitting || !p.durations.length,
-      options: p.durations.length ? p.durations.map(value => ({ value, label: `${value} 秒${value === p.model?.defaultDuration ? '（默认）' : ''}` })) : [{ value: '', label: '未连接模型' }] },
+      options: p.durations.length ? p.durations.map(value => ({ value, label: `${value} 秒${value === p.model?.defaultDuration ? '（默认）' : ''}` })) : [{ value: '', label: p.model ? '时长待确认' : '未连接模型' }] },
     generationCount: { label: '生成数量', value: p.count, disabled: submitting,
       options: Array.from({ length: maxCount }, (_, index) => ({ value: index + 1, label: `${index + 1} 个` })) },
     resolution: { label: '画质 / 分辨率', value: p.resolution || '', disabled: submitting || !p.resolutions.length,
-      options: p.resolutions.length ? choices(p.resolutions) : [{ value: '', label: '模型未声明' }] },
+      options: p.resolutions.length ? choices(p.resolutions) : [{ value: '', label: '分辨率待确认' }] },
   };
 }
 
 export function videoEstimateText(p) {
-  if (!p.tier) return '请先选择当前可见视频模型';
+  if (!p.tier) return p.model ? '模型参数待确认' : '请先选择当前可见视频模型';
   return p.totalEstimate == null ? '费用待平台确认' : p.model?.pricingCurrency === 'CNY'
     ? `公开报价预计合计 ￥${p.totalEstimate}` : `预计合计 ${p.totalEstimate} ${p.model?.priceUnit || '平台余额单位'}`;
 }
 export function videoPricingNote(p) {
-  if (!p.tier) return '请先选择有效的模型参数。';
+  if (!p.tier) return p.issue || '请先选择有效的模型参数。';
   const unit = p.model?.pricingCurrency === 'CNY' ? '元' : p.model?.priceUnit || '余额单位';
   const billing = p.model?.billingMode === 'per_second' ? '按生成秒数计费' : p.model?.billingMode === 'per_request' ? '按次计费' : '';
   const cost = p.totalEstimate == null ? `将创建 ${p.count} 个视频任务；费用待平台确认。`
     : `每个 ${p.tier.price} ${unit} × ${p.count} 个${billing ? `，${billing}` : ''}。`;
   const synced = p.model?.pricingSyncedAt ? `报价同步于 ${new Date(p.model.pricingSyncedAt).toLocaleTimeString('zh-CN')}。` : '';
   const durationSource=p.model?.capabilities?.durationSourcesByResolution?.[p.resolution];
-  const durationNote=durationSource ? `当前分辨率时长：${{platform:'平台读取',user:'用户填写',system:'系统默认'}[durationSource]}。` : '';
+  const durationNote=durationSource ? `当前分辨率时长：${{platform:'平台读取',user:'用户填写',system:'系统默认',unknown:'待确认'}[durationSource]}。` : '';
   return cost + [p.model?.pricingNote || '最终扣费以平台为准。', p.model?.specsNote, durationNote, synced,
     p.model?.capabilityConflicts?.length ? '平台能力信息有冲突，可在模型能力中查看来源并填写。' : ''].filter(Boolean).join(' ');
 }

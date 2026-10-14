@@ -1,5 +1,5 @@
 import test from 'node:test';
-import { createSkillLibrary } from '../public/skills.js';
+import { createSkillLibrary, generationSkillIssue, generationSkillNote, generationSkillControl } from '../public/skills.js';
 import { createPrevisWorkflow } from '../public/previs.js';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
@@ -199,7 +199,7 @@ test('页面脚本：数量改变更新总价，预览卡片可显式选片并�
       querySelector() { return element(selector + ' child'); }, insertAdjacentHTML(_position, html) { this.innerHTML += html; } });
     return elements.get(selector);
   }
-  const context = vm.createContext({ createSkillLibrary, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }),
+  const context = vm.createContext({ createSkillLibrary, generationSkillIssue, generationSkillNote, generationSkillControl, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }),
     assetThumbnailUrl: id => `/api/thumbnails/${id}`, document: { body: { dataset: {} }, querySelector: element, querySelectorAll: () => [], addEventListener() {} },
     window: { addEventListener() {} }, videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote, structuredClone, console,
     resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities,

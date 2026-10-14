@@ -1,6 +1,8 @@
 export const CAPABILITY_FIELDS = ['resolutions', 'durationsByResolution', 'ratios', 'qualities',
   'imageLimit', 'videoLimit', 'audioLimit', 'totalLimit', 'maxVideoDurationSeconds'];
-export const CAPABILITY_SOURCE_LABELS = { platform: '平台读取', user: '用户填写', system: '系统默认', mixed:'按分辨率分别读取' };
+export const CAPABILITY_SOURCE_LABELS = { platform: '平台读取', user: '用户填写', system: '系统默认', unknown: '待确认', mixed:'按分辨率分别读取' };
+// These are selectable options configured per model, even when the platform publishes defaults.
+export const CONFIGURABLE_OPTION_FIELDS = ['resolutions', 'qualities'];
 export const REFERENCE_STORAGE_MAX = 100;
 export const VIDEO_DURATION_STORAGE_MAX = 300;
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -76,26 +78,28 @@ export function mergeCapabilityDeclarations(records = []) {
 export function withModelCapabilities(model, kind, overrides = {}, familySupplement = null) {
   const imageDefault = /^grok-imagine-image/.test(model.name) || /^gemini-2\.5-flash-image$/.test(model.name) ? 3 : /^gemini-/.test(model.name) ? 14 : 16;
   const defaults = kind === 'video' ? {
-    resolutions: ['480p','720p','1080p'], ratios: ['16:9','9:16','1:1'],
+    resolutions: [], ratios: ['16:9','9:16','1:1'],
     imageLimit: 10, videoLimit: 10, audioLimit: 10, totalLimit: 50, maxVideoDurationSeconds: 0,
   } : { ratios: ['auto','1:1','16:9','9:16','4:3','3:4','3:2','2:3'], qualities: ['auto','1k','2k','4k'],
     imageLimit: imageDefault, videoLimit: 0, audioLimit: 0, totalLimit: imageDefault, maxVideoDurationSeconds: 0 };
   const platform = model.platformCapabilities || {};
   const values = {}, sources = {};
   for (const field of CAPABILITY_FIELDS) {
-    if (platform[field] !== undefined) { values[field] = platform[field]; sources[field] = 'platform'; }
+    if (CONFIGURABLE_OPTION_FIELDS.includes(field) && overrides[field] !== undefined) { values[field] = overrides[field]; sources[field] = 'user'; }
+    else if (platform[field] !== undefined) { values[field] = platform[field]; sources[field] = 'platform'; }
     else if (overrides[field] !== undefined) { values[field] = overrides[field]; sources[field] = 'user'; }
     else if (defaults[field] !== undefined) { values[field] = defaults[field]; sources[field] = 'system'; }
   }
+  if (kind==='video' && sources.resolutions==='system') sources.resolutions='unknown';
   if (kind==='image' && sources.totalLimit==='system') values.totalLimit=values.imageLimit;
   if (kind === 'video') {
-    if (sources.resolutions === 'system' && (platform.durationsByResolution || overrides.durationsByResolution)) {
-      values.resolutions=Object.keys(platform.durationsByResolution || overrides.durationsByResolution);
+    if (sources.resolutions === 'unknown' && (platform.durationsByResolution || overrides.durationsByResolution)) {
+      values.resolutions=[...new Set([...Object.keys(platform.durationsByResolution || {}), ...Object.keys(overrides.durationsByResolution || {})])];
       sources.resolutions=platform.durationsByResolution ? 'platform' : 'user';
     }
     const table={},durationSources={};
-    // Keep distinct duration choices for each resolution. A newly published
-    // resolution gets its own default only until its duration is published.
+    // Missing model limits stay unknown. Protocol ranges and prices do not
+    // establish the durations accepted by a particular model.
     for (const resolution of values.resolutions) {
       if (platform.durationsByResolution?.[resolution]) {
         table[resolution]=platform.durationsByResolution[resolution];durationSources[resolution]='platform';
@@ -103,11 +107,11 @@ export function withModelCapabilities(model, kind, overrides = {}, familySupplem
         table[resolution]=overrides.durationsByResolution[resolution];durationSources[resolution]='user';
       } else if (familySupplement?.durations?.length) {
         table[resolution]=familySupplement.durations;durationSources[resolution]='user';
-      } else { table[resolution]=Array.from({length:15},(_,i)=>i+1);durationSources[resolution]='system'; }
+      } else { table[resolution]=[];durationSources[resolution]='unknown'; }
     }
     values.durationsByResolution=table;values.durationSourcesByResolution=durationSources;
     const distinctSources=[...new Set(Object.values(durationSources))];
-    sources.durationsByResolution=distinctSources.length===1 ? distinctSources[0] : 'mixed';
+    sources.durationsByResolution=!distinctSources.length ? 'unknown' : distinctSources.length===1 ? distinctSources[0] : 'mixed';
     const previous = new Map((model.tiers || []).map(tier => [tier.resolution + ':' + tier.duration, tier.price]));
     const tiers = values.resolutions.flatMap(resolution => (values.durationsByResolution[resolution] || []).map(duration => {
       const quote = model.quoteRates?.[resolution] ?? model.quoteRates?.['*'];
@@ -115,7 +119,7 @@ export function withModelCapabilities(model, kind, overrides = {}, familySupplem
         : model.quoteRates ? null : previous.get(resolution + ':' + duration) ?? null;
       return { resolution, duration, price };
     }));
-    const resolutions = [...new Set(tiers.map(tier => tier.resolution))];
+    const resolutions = values.resolutions;
     const defaultResolution = resolutions.includes(model.defaultResolution) ? model.defaultResolution : resolutions[0] || '';
     const durations = tiers.filter(tier => tier.resolution === defaultResolution).map(tier => tier.duration);
     model = { ...model, tiers, ratios: values.ratios, defaultResolution,
@@ -135,7 +139,7 @@ export function capabilitySummary(capabilities, kind) {
   const parts = ['图片 ' + c.imageLimit + ' / 视频 ' + c.videoLimit + ' / 音频 ' + c.audioLimit + ' 份，合计 ' + c.totalLimit + ' 份'];
   const limitSources = [...new Set(['imageLimit','videoLimit','audioLimit','totalLimit'].map(source))];
   parts[0] += '（' + limitSources.join('、') + '）';
-  if (kind === 'video') parts.push('分辨率：' + c.resolutions.join('、') + '（' + source('resolutions') + '）；时长：' + source('durationsByResolution'));
+  if (kind === 'video') parts.push('分辨率：' + (c.resolutions.join('、') || '待确认') + '（' + source('resolutions') + '）；时长：' + source('durationsByResolution'));
   else parts.push('画质：' + c.qualities.filter(value => value !== 'auto').join('、').toUpperCase() + '（' + source('qualities') + '）');
   return parts.join('。') + '。';
 }

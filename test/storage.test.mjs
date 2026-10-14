@@ -122,7 +122,7 @@ for (const [extension, mime, bytes] of [
     assert.doesNotMatch(publicUrl, /test-secret/);
     const again = await storage.prepareReferences(job); assert.deepEqual(again, prepared);
     assert.deepEqual(calls.map(call => call.method), ['HEAD', 'PUT', 'HEAD']);
-    const body = buildVideoRequest({ ...job, references: prepared });
+    const body = buildVideoRequest({ ...job, providerTiers: [{duration:job.duration,resolution:job.resolution}], references: prepared });
     assert.deepEqual(body.content[1], { type: 'audio_url', audio_url: { url: publicUrl }, role: 'reference_audio', name: '音频1' });
     assert.match(body.content[0].text, /@音频1/);
   });

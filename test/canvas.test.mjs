@@ -1013,7 +1013,7 @@ function attachReferenceList(h, card) {
     section.innerHTML = sectionMatch[1]; section.serializedOuterHTML = markup;
     section.elementsFromOuterHTML = replacement => [sectionFromMarkup(replacement)];
     const heading = h.makeElement('div'); heading.className = 'shot-reference-heading';
-    const total = h.makeElement('strong'); total.textContent = sectionMatch[1].match(/<strong>(参考素材 · \d+)<\/strong>/)[1]; heading.append(total); section.append(heading);
+    const total = h.makeElement('strong'); total.textContent = sectionMatch[1].match(/<strong>((?:参考素材|已关联素材) · \d+)<\/strong>/)[1]; heading.append(total); section.append(heading);
     const list = h.makeElement('div'); list.className = 'shot-reference-list';
     for (const match of sectionMatch[1].matchAll(/<div class="shot-reference-item"([^>]*)>([\s\S]*?)<\/div>/g)) {
       const row = h.makeElement('div'); row.className = 'shot-reference-item'; row.innerHTML = match[2];
@@ -1377,7 +1377,7 @@ test('提示词失焦到实际断开按钮时一次点击断线，立即刷新�
   assert.equal(scene.promptMentions.find(mention => mention.key === 'node:image-b').label,'图片1');
   const sectionAfter = card.querySelector('.shot-references');
   assert.notEqual(sectionAfter,sectionBefore); assert.equal(sectionBefore.parentElement,null,'outerHTML 应真正替换参考 DOM');
-  assert.equal(sectionBefore.outerHTMLUpdates.length,1); assert.equal(sectionAfter.querySelector('.shot-reference-heading').querySelector('strong').textContent,'参考素材 · 3');
+  assert.equal(sectionBefore.outerHTMLUpdates.length,1); assert.match(sectionAfter.querySelector('.shot-reference-heading').querySelector('strong').textContent,/(?:参考素材|已关联素材) · 3/);
   assert.deepEqual(liveReferenceRows(sectionAfter),[['视频1','动作.mp4'],['图片1','街景.png'],['视频2','运镜.mp4']]);
   assert.deepEqual(sectionAfter.querySelectorAll('[data-card-action="disconnect-reference"]').map(button => button.getAttribute('aria-label')),['断开视频1','断开图片1','断开视频2']);
   assert.deepEqual(seen.map(([type]) => type),['pointerdown','focusout','click'],'事件应通过真实 viewport 冒泡');

@@ -291,3 +291,37 @@ test('Shift/Ctrl arrow selection retains browser behavior and dismisses suggesti
   ui.control.selectionStart = 0; ui.control.selectionEnd = ui.control.value.length; ui.fire('select');
   assert.equal(ui.menu.hidden, true); assert.equal(ui.inserts.length, 0);
 });
+
+
+test('clicking a reference thumbnail replaces a pending @ query even after its menu closes', t => {
+  const reference = image('人物');
+  const ui = harness(t, [reference], '主体参考@人物');
+  ui.fire('input'); ui.fire('keydown', { key: 'Escape' });
+  assert.equal(ui.menu.hidden, true);
+  assert.equal(ui.controller.insert(ui.control, reference), true);
+  assert.equal(ui.control.value, '主体参考@图片1');
+  assert.equal(ui.control.selectionStart, ui.control.value.length);
+  assert.equal(ui.inserts.length, 1);
+});
+
+test('reference thumbnail insertion preserves the current caret and selected prose', t => {
+  const reference = image('人物');
+  const ui = harness(t, [reference], '保持主体，替换背景。');
+  ui.control.selectionStart = 5; ui.control.selectionEnd = 9;
+  assert.equal(ui.controller.insert(ui.control, reference), true);
+  assert.equal(ui.control.value, '保持主体，@图片1。');
+  assert.equal(ui.control.selectionStart, 9);
+  assert.equal(ui.menu.hidden, true);
+});
+
+
+test('the caret select event after inserting a reference keeps the temporary search closed', t => {
+  const ui = harness(t, [image('人物')], '参考@');
+  ui.fire('input'); ui.fire('keydown', { key: 'Enter' });
+  assert.equal(ui.control.value, '参考@图片1');
+  ui.fire('select');
+  assert.equal(ui.menu.hidden, true);
+  assert.equal(ui.control.getAttribute('aria-expanded'), 'false');
+  ui.fire('click');
+  assert.equal(ui.menu.hidden, false, 'an intentional click can reopen the existing reference');
+});

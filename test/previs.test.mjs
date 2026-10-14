@@ -170,3 +170,26 @@ test('网站助手限定回环 Host、站点授权、CORS 和令牌，允许授�
   await fetch(url + '/api/helper/revoke', { method: 'POST', headers: { 'X-Jingce-Helper-Token': bootstrap.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ origin }) });
   assert.equal((await fetch(url + '/api/previs/tools', { headers })).status, 403);
 });
+
+
+test('预演子工程持久保存于当前创作工程，任务归属受限且保留旧任务和幂等编号', async t => {
+  const { jobs, store, project, root } = await storeFixture(t);
+  const other = createProject({ title: '另一创作工程' }); await store.mutate(state => state.projects.push(other));
+  const legacy = await jobs.start(project.id, { operationId: 'legacy-child-op', mode: 'helper', spec: tinySpec() });
+  await jobs.patch(legacy.id, { previsProjectId: undefined });
+  const updated = await jobs.createProject(project.id, { title: '  第二镜头  ' });
+  const child = updated.previsProjects.at(-1);
+  assert.equal(updated.id, project.id); assert.equal(child.title, '第二镜头');
+  assert.equal(store.list().length, 2);
+  assert.deepEqual(jobs.projects(other.id), [{ id: 'default', title: '预演工程 1' }]);
+  const disk = JSON.parse(await readFile(path.join(root, 'projects.json'), 'utf8'));
+  assert.equal(disk.projects.find(item => item.id === project.id).previsProjects.at(-1).id, child.id);
+  const first = await jobs.start(project.id, { operationId: 'new-child-op', previsProjectId: child.id, mode: 'helper', spec: tinySpec() });
+  assert.equal(first.previsProjectId, child.id);
+  const repeated = await jobs.start(project.id, { operationId: 'new-child-op', previsProjectId: child.id, mode: 'helper', spec: { ...tinySpec(), name: '不覆盖原参数' } });
+  assert.equal(repeated.id, first.id); assert.equal(repeated.spec.name, first.spec.name);
+  assert.equal((await jobs.start(project.id, { operationId: 'legacy-child-op', mode: 'helper', spec: tinySpec() })).id, legacy.id);
+  await assert.rejects(jobs.start(project.id, { operationId: 'new-child-op', mode: 'helper', spec: tinySpec() }), /另一个预演工程/);
+  await assert.rejects(jobs.start(other.id, { operationId: 'wrong-parent', previsProjectId: child.id, mode: 'helper', spec: tinySpec() }), /当前创作工程/);
+  await assert.rejects(jobs.createProject(project.id, { title: ' ' }), /名称/);
+});

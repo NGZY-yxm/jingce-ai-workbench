@@ -22,6 +22,7 @@ export function initManagement() {
   let user, scope = 'account', tab = 'overview', revision = 0, pageNum = 1, filters = {}, noticeCache = [], busy = false;
   const sidebar = document.querySelector('.sidebar-bottom');
   const links = document.createElement('div');
+  links.className = 'portal-sidebar-links';
   links.innerHTML = `<button class="nav-button portal-nav-entry" id="personal-center">个人中心 <span>账号与任务</span></button><button class="nav-button portal-nav-entry" id="notice-center">公告中心 <span id="notice-count"></span></button><button class="nav-button portal-nav-entry" id="admin-center" hidden>管理后台 <span>ADMIN</span></button>`;
   sidebar.prepend(links);
   document.querySelector('#connections-center-button').textContent = '模型连接 · API';
@@ -35,9 +36,11 @@ export function initManagement() {
   const message = (value, error = false) => { feedback.textContent = value; feedback.classList.toggle('error', error); };
   const params = () => new URLSearchParams({ ...filters, page: String(pageNum), pageSize: '20' });
   const pagination = data => `<div class="portal-pagination"><span>共 ${data.total} 条 · 第 ${data.page} / ${Math.max(1, Math.ceil(data.total / data.pageSize))} 页</span>${btn('上一页', `data-page="${data.page - 1}" ${data.page <= 1 ? 'disabled' : ''}`)}${btn('下一页', `data-page="${data.page + 1}" ${data.page * data.pageSize >= data.total ? 'disabled' : ''}`)}</div>`;
-  const tabs = () => scope === 'admin' ? { overview: '运营概览', users: '用户管理', tasks: '全站任务', announcements: '公告管理', settings: '网站参数', storage: '云存储', audit: '操作日志' }
+  const tabs = () => scope === 'admin' ? { overview: '运营概览', users: '用户管理', tasks: '全站任务', announcements: '公告管理', settings: '网站参数', capabilities: '模型能力', storage: '云存储', audit: '操作日志' }
     : { overview: '我的概览', tasks: '任务中心', ledger: '费用与用量', notices: '公告消息', profile: '个人资料', security: '账号安全', activity: '登录与操作记录' };
   function navigation() {
+    dialog.dataset.scope = scope;
+    dialog.dataset.tab = tab;
     dialog.querySelector('#portal-title').textContent = scope === 'admin' ? '管理后台' : '个人中心';
     dialog.querySelector('.portal-nav').innerHTML = Object.entries(tabs()).map(([key, label]) => `<button type="button" data-tab="${key}" aria-selected="${tab === key}">${label}</button>`).join('');
   }
@@ -96,6 +99,9 @@ export function initManagement() {
     if (tab === 'settings') {
       const s = await request('/api/admin/settings');
       return `<h3>网站参数</h3><p class="portal-subtitle">保存后立即生效。维护期间普通用户可以查看已有记录和管理账号，暂停提交创作与修改工程。</p>${formStart('settings')}${field('网站名称', 'siteName', s.siteName, 'text', 'required maxlength="60"')}<label>联系支持 / 使用说明<textarea name="supportText" maxlength="1000">${escape(s.supportText)}</textarea></label>${field('每位用户的有效工程数量上限', 'maxProjects', s.maxProjects, 'number', 'required min="1" max="10000"')}${check('开放新用户注册', 'registrationEnabled', s.registrationEnabled)}${check('开启维护模式', 'maintenance', s.maintenance)}<label>维护提示<textarea name="maintenanceMessage" maxlength="500">${escape(s.maintenanceMessage)}</textarea></label>${saveButton('保存网站参数')}`;
+    }
+    if (tab === 'capabilities' && scope === 'admin') {
+      return `<h3>模型能力</h3><p class="portal-subtitle">逐个设置视频模型允许选择的分辨率、图片模型允许选择的画质，并查看参考素材限制及平台同步信息。</p><section class="portal-panel"><h4>视频模型</h4><p class="portal-help">设置每个模型的可选分辨率，例如仅开放 720P，或同时开放 720P 和 1080P；分别配置对应的生成时长。</p><div class="portal-actions">${btn('管理视频模型能力', 'data-model-capability="video"')}</div></section><section class="portal-panel"><h4>图片模型</h4><p class="portal-help">管理画面比例、画质及参考图片数量等能力设置。</p><div class="portal-actions">${btn('管理图片模型能力', 'data-model-capability="image"')}</div></section><p class="portal-help">设置用于当前登录账号的模型连接。保存后立即更新生成页面与画布的选项，自动同步平台数据时会保留手动配置的分辨率和画质。</p>`;
     }
     if (tab === 'storage') {
       const s = await request('/api/admin/storage');

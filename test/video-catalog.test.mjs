@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { catalogForVideoModelIds } from '../lib/video-v3.mjs';
+import { catalogForVideoModelIds as rawCatalogForVideoModelIds } from '../lib/video-v3.mjs';
 import { mergeVideoCatalogMetadata } from '../lib/video-catalog.mjs';
 import { videoParameters } from '../public/video-parameters.js';
+
+import { videoModelFixture } from './fixtures/video-models.mjs';
+const catalogForVideoModelIds = ids => rawCatalogForVideoModelIds(ids.map(videoModelFixture));
 
 const ids = {
   dola: 'dola-seedance-2.0-903（次）', dola25: 'dola-seedance-2.5-30010（次）',
@@ -44,10 +47,10 @@ test('实际公开视频目录按完整名称合并，按秒和按次报价不�
     assert.equal(model.pricingAvailable, true); assert.equal(model.pricingCurrency, 'CNY');
     assert.equal(model.priceUnit, '人民币'); assert.equal(model.pricingSource, options.source);
     assert.equal(model.pricingSyncedAt, options.syncedAt); assert.equal(model.specsAvailable, false);
-    assert.equal(model.durationSource, 'protocol'); assert.match(model.pricingNote, /账号分组.*平台账单/);
-    assert.match(model.specsNote, /时长范围.*未公开/);
+    assert.equal(model.durationSource, 'platform'); assert.match(model.pricingNote, /账号分组.*平台账单/);
+    assert.match(model.specsNote, /时长：平台读取/);
   }
-  assert.equal(byName.get(ids.seedance).resolutionSource, 'protocol');
+  assert.equal(byName.get(ids.seedance).resolutionSource, 'platform');
   assert.deepEqual(base, before, '合并不能改写底层接口目录或历史快照');
 });
 
@@ -70,14 +73,14 @@ test('公开目录不扩大当前密钥权限，也不从描述、模型简称�
   const catalog = mergeVideoCatalogMetadata(allowed, observed(), options);
   assert.deepEqual(catalog.map(model => model.name), [ids.dola]);
   assert.equal(catalog[0].defaultResolution, '720p');
-  assert.equal(catalog[0].resolutionSource, 'protocol');
+  assert.equal(catalog[0].resolutionSource, 'platform');
   const unmatched = mergeVideoCatalogMetadata(catalogForVideoModelIds([ids.seedance]), plaza([
     { name: 'seedance', description: 'seedance 0.4 元/秒；720p；5–10秒',
       models: [entry('seedance-2.0', 'video', 0.4), entry(ids.dola, 'per_request', 1.2)] },
   ]), options);
   assert.ok(unmatched[0].tiers.every(tier => tier.price === null));
   assert.equal(unmatched[0].pricingAvailable, false);
-  assert.equal(unmatched[0].resolutionSource, 'protocol');
+  assert.equal(unmatched[0].resolutionSource, 'platform');
 });
 
 test('多个公开分组报价相同才可采用，冲突与缺失档位保持未知并保留分组说明', () => {

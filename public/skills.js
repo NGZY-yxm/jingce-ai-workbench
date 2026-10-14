@@ -17,6 +17,43 @@ export function skillOptions(items = [], selected = '') {
     + available.map(item => `<option value="${escapeHtml(item.id)}"${item.id === selected ? ' selected' : ''}>${escapeHtml(item.name)}</option>`).join('');
 }
 
+export function generationSkillText(skill) {
+  return [`技能：${skill.name}`, skill.content,
+    ...(skill.references || []).map(file => `参考资料：${file.path}\n${file.content}`)].filter(Boolean).join('\n\n');
+}
+
+export function generationSkillPrompt(prompt, skill, kind = 'image') {
+  if (!skill) return prompt;
+  const result = generationSkillText(skill) + `\n\n本次${kind === 'video' ? '视频' : '图片'}生成要求：\n` + prompt;
+  if (result.length > 4000) throw new Error('合并技能、参考资料和生成要求后，提示词超过 4000 个字符，请缩短技能或提示词。');
+  return result;
+}
+
+export function generationSkillIssue(items = [], selected = '', prompt, kind = 'image') {
+  if (!selected) return '';
+  const skill = items.find(item => item.id === selected && !item.deletedAt);
+  if (!skill) return '所选技能已删除或未导入，请恢复或重新选择技能。';
+  const length = skill.generationCharacters;
+  if (typeof prompt === 'string' && Number.isFinite(length)
+      && length + `\n\n本次${kind === 'video' ? '视频' : '图片'}生成要求：\n`.length + prompt.length > 4000) {
+    return '合并技能、参考资料和生成要求后，提示词超过 4000 个字符，请缩短技能或提示词。';
+  }
+  return '';
+}
+
+export function generationSkillNote(items = [], selected = '') {
+  if (!selected) return '';
+  const issue = generationSkillIssue(items, selected);
+  if (issue) return issue;
+  const skill = items.find(item => item.id === selected);
+  return [skill.description, '生成时应用技能的文字规则' + (skill.referenceCount ? `和 ${skill.referenceCount} 份文字参考资料。` : '。'),
+    skill.dependencies?.length || skill.declaredTools ? '脚本和外部工具需手动运行。' : ''].filter(Boolean).join(' ');
+}
+
+export function generationSkillControl(items, selected, { field, disabled = false, canvas = false, icon = '' } = {}) {
+  return `<div class="generation-skill-control"><label><span class="generation-skill-label">使用技能</span><select ${field} aria-label="使用技能"${disabled ? ' disabled' : ''}>${skillOptions(items, selected)}</select></label><button type="button" class="skill-manage-button" ${canvas ? 'data-card-action="generation-manage-skills"' : 'data-generation-manage-skills'} title="管理技能库" aria-label="管理技能库">${icon}</button></div><p class="generation-skill-note honest-note"${selected ? '' : ' hidden'}>${escapeHtml(generationSkillNote(items, selected))}</p>`;
+}
+
 export async function readSkillFiles(files, Zip = globalThis.JSZip) {
   const result = [];
   let totalBytes = 0;

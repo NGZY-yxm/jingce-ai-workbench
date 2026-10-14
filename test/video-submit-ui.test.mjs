@@ -10,7 +10,7 @@ import { resolveSceneReferences, syncProjectReferences, referenceLabel, referenc
 import { referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities } from '../public/reference-api.js';
 import { updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions } from '../public/prompt-mentions.js';
 import { createReferencePromptEditor } from '../public/prompt-editor.js';
-import { createSkillLibrary } from '../public/skills.js';
+import { createSkillLibrary, generationSkillIssue, generationSkillNote, generationSkillControl } from '../public/skills.js';
 import { createPrevisWorkflow } from '../public/previs.js';
 
 const catalog = [{ name: 'model-a', defaultDuration: 5, defaultResolution: '720p',
@@ -34,7 +34,7 @@ async function page(fetcher, storage = new Map()) {
     videoParameters, videoParameterControls, updateVideoParameter, videoEstimateText, videoPricingNote,
     resolveSceneReferences, syncProjectReferences, referenceLabel, referenceKey, referenceRequestIssue, referenceCapabilityText, referenceConstraintIssue, referencePreparationModel, referenceCapabilities,
     updatePromptMentions, insertReferenceMention, remapPromptMentions, invalidPromptMentions, createReferencePromptEditor,
-    createSkillLibrary, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }), createInfiniteCanvas: () => ({ render() {}, fit() {}, activate() {}, reset() {}, busy: () => false }), fetch: fetcher,
+    createSkillLibrary, generationSkillIssue, generationSkillNote, generationSkillControl, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }), createInfiniteCanvas: () => ({ render() {}, fit() {}, activate() {}, reset() {}, busy: () => false }), fetch: fetcher,
   });
   const script = (await readFile(new URL('../public/app.js', import.meta.url), 'utf8'))
     .replace(/^import[^\n]*\n/gm, '').replace(/\ninit\(\);\s*$/, '\n');

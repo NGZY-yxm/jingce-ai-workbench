@@ -8,3 +8,43 @@ body[data-auth-gateway="1"] #center-storage-tab,body[data-auth-gateway="1"] #sto
 .portal-filters{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0 16px;align-items:center}.portal-filters input[type=search]{flex:2;min-width:150px}.portal-filters select,.portal-filters input[type=date]{width:auto;max-width:155px}.portal-table-wrap{overflow:auto;border:1px solid var(--p-line);border-radius:10px;background:var(--p-card)}.portal-table{width:100%;border-collapse:collapse;text-align:left;font-size:12px;line-height:1.6;white-space:nowrap}.portal-table th{padding:12px 14px;font-weight:500;color:var(--p-muted);background:var(--p-bg)}.portal-table td{padding:13px 14px;border-top:1px solid var(--p-line);max-width:260px;overflow:hidden;text-overflow:ellipsis}.portal-table small{display:block;color:var(--p-muted);font-size:10px}.portal-table button{font-size:11px;padding:5px 8px}.portal-empty{padding:48px 20px;text-align:center;color:var(--p-muted);line-height:1.9}.portal-pagination{display:flex;gap:12px;justify-content:flex-end;align-items:center;margin-top:15px;color:var(--p-muted);font-size:11px}.portal-badge{display:inline-block;background:var(--p-soft);color:var(--p-accent);padding:3px 8px;border-radius:6px;font-size:11px}.portal-badge.warn{background:#b9742222;color:#bc8b49}.portal-badge.bad{background:#c76e5522;color:#cb735c}
 .portal-notice{padding:20px;border:1px solid var(--p-line);border-radius:12px;background:var(--p-card);margin:12px 0}.portal-notice p{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;font-size:13px}.portal-notice header{display:flex;gap:10px;justify-content:space-between;align-items:center}.portal-notice h4{margin:0}.portal-notice small{color:var(--p-muted)}.portal-identity{display:flex;gap:14px;align-items:center;margin:6px 0 24px}.portal-avatar{height:50px;width:50px;border-radius:15px;display:grid;place-items:center;font-size:23px;color:var(--p-accent);background:var(--p-soft)}.portal-identity h3{margin:0}.portal-identity small{color:var(--p-muted)}.portal-detail{height:auto;max-height:85dvh;max-width:680px;overflow:auto;padding:25px}.portal-detail dl{display:grid;grid-template-columns:95px 1fr;gap:14px;font-size:12px}.portal-detail dt{color:var(--p-muted)}.portal-detail dd{margin:0;overflow-wrap:anywhere}.portal-timeline{padding-left:20px;font-size:12px;line-height:2}.portal-site-note{white-space:pre-wrap;font-size:12px;line-height:1.7;color:#847b85;margin-top:14px}.portal-nav-entry{display:flex;align-items:center;justify-content:space-between}.portal-nav-entry span{font-size:10px;opacity:.65}
 @media(max-width:780px){.portal-dialog{width:100vw;height:100dvh;border-radius:0;border:0}.portal-header{padding:16px 18px}.portal-layout{display:block;height:calc(100% - 78px);overflow:auto}.portal-nav{display:flex;gap:4px;padding:8px 12px;border-right:0;border-bottom:1px solid var(--p-line);position:sticky;top:0;z-index:1}.portal-nav button{width:auto;flex-shrink:0;margin:0;padding:10px 12px;white-space:nowrap;font-size:12px}.portal-main{padding:20px 16px;overflow:visible}.portal-cards{grid-template-columns:repeat(2,1fr)}.portal-stat{padding:16px}.portal-stat strong{font-size:24px}.portal-form .portal-grid{grid-template-columns:1fr}.portal-filters input[type=search]{flex-basis:100%}.portal-filters select,.portal-filters input[type=date]{flex:1;max-width:none;width:120px}.portal-detail{width:calc(100vw - 20px);height:auto;border-radius:12px;padding:20px}.portal-notice header{align-items:flex-start}}
+
+/* Keep account navigation labels readable in the desktop and mobile sidebar. */
+:root[data-theme] body[data-auth-gateway="1"] .sidebar-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  margin-left: 0;
+}
+body[data-auth-gateway="1"] .portal-sidebar-links {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+:root[data-theme] body[data-auth-gateway="1"] .sidebar-bottom .nav-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 10px 8px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+:root[data-theme] body[data-auth-gateway="1"] .portal-nav-entry > span {
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  margin-left: auto;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+body[data-auth-gateway="1"] .portal-nav-entry > span:empty { display: none; }

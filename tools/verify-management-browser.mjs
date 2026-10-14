@@ -16,10 +16,11 @@ db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT
 for (const name of ['owner', 'member']) db.prepare('INSERT INTO users(username,email,password_hash) VALUES(?,?,?)').run(name, name + '@example.com', await bcrypt.hash('original-password', 4));
 await writeFile(path.join(root, 'storage.private.json'), JSON.stringify({ provider: 'r2', bucket: 'test-bucket', endpoint: 'https://' + 'a'.repeat(32) + '.r2.cloudflarestorage.com', enabled: true, region: 'auto', prefix: 'jingce', expiresHours: 72, secretId: 'secret-id', secretKey: 'secret-key' }));
 const codes = new Map(), errors = [], origin = 'https://management.example.test';
+const optionVideoName='seedance-2.0-933-720P（秒）';
 let app, browser;
 const pass = message => console.log('PASS ' + message);
 try {
-  app = await createStudio({ root, multiUser: true, publicOrigin: origin, catalog: [], imageCatalog: [], textCatalog: [], tools: { ready: false },
+  app = await createStudio({ root, multiUser: true, publicOrigin: origin, catalog: [{name:optionVideoName,requestMode:'beibeihai-content-v3',platformCapabilities:{resolutions:['720p','1080p'],durationsByResolution:{'720p':[5,10],'1080p':[5]}}}], imageCatalog: [{name:'gpt-image-2',platformCapabilities:{qualities:['auto','1k','4k']}}], textCatalog: [], tools: { ready: false },
     auth: { databasePath: path.join(root, 'users.db'), sendCode: async (email, code) => codes.set(email, code) }, management: { adminEmail: 'owner@example.com' } });
   const url = await app.start(0);
   browser = await chromium.launch({ headless: true, channel: process.env.JINGCE_BROWSER_CHANNEL || 'msedge' });
@@ -62,6 +63,28 @@ try {
   const admin = await makePage(); await login(admin, 'owner'); await admin.locator('#admin-center').click(); await admin.locator('.portal-stat').first().waitFor();
   await admin.screenshot({ path: 'outputs/admin-overview-desktop.png', fullPage: true });
   for (const tab of ['users', 'tasks', 'settings', 'storage', 'audit']) { await navigate(admin, tab); assert.equal(await admin.locator('.portal-feedback.error').count(), 0); }
+  await navigate(admin, 'capabilities');
+  for (const kind of ['video', 'image']) {
+    await admin.locator(`#management-dialog [data-model-capability="${kind}"]`).click();
+    await admin.locator('#model-capability-dialog').waitFor({ state: 'visible' });
+    assert.equal(await admin.locator('#model-capability-dialog [name=kind]').inputValue(), kind);
+    const capability=admin.locator('#model-capability-dialog');
+    const field=kind==='video'?'resolutions':'qualities';
+    assert.equal(await capability.locator(`[data-capability-field="${field}"]`).isEnabled(),true);
+    await capability.locator(`[data-capability-field="${field}"]`).fill(kind==='video'?'720p':'auto, 4k');
+    await capability.locator('[type=submit]').click();
+    try { await capability.locator('[data-message]').filter({hasText:'已保存'}).waitFor(); }
+    catch(error) {
+      console.log('CAPABILITY SAVE DIAGNOSTICS',kind,await capability.locator('[data-message]').textContent(),JSON.stringify(errors));
+      await admin.screenshot({path:'outputs/admin-model-options-failure.png',fullPage:true});throw error;
+    }
+    const catalog=await admin.evaluate(()=>fetch('/api/model-capabilities').then(r=>r.json()));
+    assert.deepEqual(kind==='video'?catalog.catalog[0].capabilities.resolutions:catalog.imageCatalog[0].capabilities.qualities,kind==='video'?['720p']:['auto','4k']);
+    await admin.screenshot({path:`outputs/admin-model-${field}-desktop.png`,fullPage:true});
+    await capability.locator('[data-close]').click();
+    assert.equal(await admin.locator('#management-dialog').isVisible(), true);
+  }
+  pass('admin edits per-model video resolutions and image qualities, saves and keeps management navigation');
   await navigate(admin, 'storage'); assert.equal(await admin.locator('[data-form=storage] [name=secretKey]').inputValue(), '');
   await admin.locator('[data-form=storage] [name=prefix]').fill('shared'); await admin.locator('[data-form=storage] [type=submit]').click(); await admin.getByText('统一云存储配置已保存。', { exact: true }).waitFor();
   await navigate(admin, 'settings'); await admin.locator('[name=siteName]').fill('幻帧测试站'); await admin.locator('[data-form=settings] [type=submit]').click(); await admin.getByText('网站参数已保存并生效。', { exact: true }).waitFor();

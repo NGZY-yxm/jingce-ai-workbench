@@ -83,7 +83,7 @@ test('Failure to load optional pricing does not hide dynamic models or invent pr
 });
 
 test('Dynamic model request uses its authorized full ID and validates the saved parameter tiers', async () => {
-  const [model] = await getCatalog([{ id: futureId }]);
+  const [model] = await getCatalog([{ id: futureId, durations_by_resolution: { '720p': [5, 10] } }]);
   const job = { model: model.name, requestMode: VIDEO_REQUEST_MODE, prompt: 'A static test scene',
     duration: 5, resolution: '720p', ratio: '16:9', providerTiers: model.tiers };
   assert.equal(buildVideoRequest(job).model, futureId);

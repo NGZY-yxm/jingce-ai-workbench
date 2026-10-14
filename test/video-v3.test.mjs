@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { videoModelFixture } from './fixtures/video-models.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -38,10 +39,10 @@ import { insertReferenceMention, remapPromptMentions, invalidPromptMentions } fr
 const dolaIds = ['dola-seedance-2.0-903-720P（次）', 'dola-seedance-2.5-30010-720P（次）'];
 const ids = ['seedance-2.0-933-720P（秒）', 'seedance-2.0-fast-933-720P（次）',
   'seedance-2.0-mini-903-720P（次）', 'seedance-2.5-301010-1K（秒）', 'minimax-h3-933-2K（次）', ...dolaIds];
-const catalog = catalogForVideoModelIds(ids);
+const catalog = catalogForVideoModelIds(ids.map(videoModelFixture));
 const settings = { ...DEFAULT_CONNECTION, apiKey: 'v3-original-test-secret' };
 const job = { model: ids[1], duration: 5, resolution: '720p', ratio: '16:9',
-  prompt: '原创人物坐在窗边，拿起苹果。', requestMode: VIDEO_REQUEST_MODE };
+  prompt: '原创人物坐在窗边，拿起苹果。', requestMode: VIDEO_REQUEST_MODE, providerTiers: catalog[1].tiers };
 const reply = (data, status = 200, headers = {}) => new Response(JSON.stringify(data),
   { status, headers: { 'Content-Type': 'application/json', ...headers } });
 const references = [
@@ -89,10 +90,10 @@ test('新版模型目录使用当前密钥，仅保留完整模型 ID；无有�
   for (const model of result) {
     assert.equal(model.requestMode, VIDEO_REQUEST_MODE); assert.equal(model.pricingAvailable, false);
     assert.ok(model.tiers.every(tier => tier.price === null)); assert.equal(model.referenceSupport.verified, false);
-    assert.equal(model.referenceSupport.imageLimit, null);
+    assert.equal(model.referenceSupport.imageLimit, 9);
   }
-  assert.equal(result[0].defaultResolution, '480p'); assert.equal(result[0].defaultDuration, 5);
-  const check = await checkConnection(settings, async () => reply({ data: [{ id: ids[1] }] }));
+  assert.equal(result[0].defaultDuration, 0); assert.deepEqual(result[0].tiers, []);
+  const check = await checkConnection(settings, async () => reply({ data: [videoModelFixture(ids[1])] }));
   assert.equal(check.selectedModelVisible, false); assert.equal(check.readable, true);
 });
 
@@ -105,12 +106,12 @@ test('历史 dola 模型名称仅在当前密钥返回时保留，提交不改�
 
 test('两个 dola 视频模型按密钥权限显示，表单可选且提交完整名称，重启保留选择', async t => {
   const currentCatalog = await loadCatalog(settings, async () => reply({ data: [
-    ...ids.map(id => ({ id })), { id: dolaIds[0] }, { id: 'image-2' }, { id: 'gpt-4.1' },
+    ...ids.map(videoModelFixture), { id: dolaIds[0] }, { id: 'image-2' }, { id: 'gpt-4.1' },
   ] }));
   assert.deepEqual(currentCatalog.map(model => model.name), ids);
   const restricted = await loadCatalog(settings, async () => reply({ data: [{ id: dolaIds[1] }] }));
   assert.deepEqual(restricted.map(model => model.name), [dolaIds[1]]);
-  const check = await checkConnection(settings, async () => reply({ data: ids.map(id => ({ id })) }));
+  const check = await checkConnection(settings, async () => reply({ data: ids.map(videoModelFixture) }));
   assert.equal(check.videoModelCount, 7);
   const ctx = await setup(t, async (_url, options) => {
     const request = JSON.parse(options.body);
@@ -161,7 +162,7 @@ test('直连视频端点仍可选，并用于模型查询、创建和查询任�
   const directSettings = { ...settings, baseUrl: direct };
   const catalogResult = await loadCatalog(directSettings, async (url, options) => {
     calls.push({ url, method: options.method });
-    return reply({ data: [{ id: ids[0] }] });
+    return reply({ data: [videoModelFixture(ids[0])] });
   });
   assert.equal(catalogResult[0].name, ids[0]);
   await submitVideo(directSettings, job, undefined, async (url, options) => {
@@ -187,7 +188,7 @@ test('整数秒数、分辨率、比例、文本及完整模型名不合法时�
   const bad = [
     ...[undefined, null, '5', -1, 0, 5.5, 16, NaN, Infinity].map(duration => ({ duration })),
     ...['1K', '2K', '2048p', '720P'].map(resolution => ({ resolution })),
-    { ratio: '21:9' }, { model: 'seedance-2.0-fast' }, { prompt: '  ' }, { requestMode: undefined },
+    { ratio: '21:9' }, { model: ' invalid-model' }, { prompt: '  ' }, { requestMode: undefined },
   ];
   for (const changes of bad) await assert.rejects(submitVideo(settings, { ...job, ...changes }, undefined, fetcher));
   assert.equal(calls, 0);
@@ -397,7 +398,7 @@ test('HTTP 新版完整链路：当前密钥目录、混合参考、单次 POST�
   t.after(async () => { if (app) await app.close(); https.get = originalGet; await rm(root, { recursive: true, force: true }); });
   const videoFetcher = async (url, options) => {
     calls.push({ url, method: options.method || 'GET', auth: options.headers.Authorization, body: options.body && JSON.parse(options.body) });
-    if (url.endsWith('/v1/models')) return reply({ data: [{ id: options.headers.Authorization.includes('new-http-key') ? ids[2] : ids[1] }] });
+    if (url.endsWith('/v1/models')) return reply({ data: [videoModelFixture(options.headers.Authorization.includes('new-http-key') ? ids[2] : ids[1])] });
     if (options.method === 'POST') return reply({ id: 'http-v3-task', status: 'queued' });
     return reply({ id: 'http-v3-task', status: 'succeeded', content: { video_url: 'https://8.8.8.8/result.mp4' } });
   };
@@ -458,7 +459,7 @@ test('目录刷新或新密钥查询失败后不沿用旧权限目录，原任�
   t.after(async () => { if (app) await app.close(); await rm(root, { recursive: true, force: true }); });
   app = await createStudio({ root, imageCatalog: [], textCatalog: [], tools: { ready: false }, videoFetcher: async () => {
     if (fail) return reply({ error: { code: 'unauthorized', message: 'bad key' } }, 401);
-    return reply({ data: [{ id: ids[0] }] });
+    return reply({ data: [videoModelFixture(ids[0])] });
   } });
   const url = await app.start(0), bootstrap = await (await fetch(url + '/api/bootstrap')).json();
   const send = body => fetch(url + '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Studio-Token': bootstrap.token }, body: JSON.stringify(body) });
@@ -473,7 +474,7 @@ test('HTTP 生成前强制同步报价，价格变化与未知转已知先拦截
   let rate = 0.5, directoryReads = 0, submissions = 0;
   const app = await createStudio({ root, imageCatalog: [], textCatalog: [], tools: { ready: false },
     videoFetcher: async url => {
-      if (url.endsWith('/v1/models')) { directoryReads += 1; return reply({ data: [{ id: ids[0] }] }); }
+      if (url.endsWith('/v1/models')) { directoryReads += 1; return reply({ data: [videoModelFixture(ids[0])] }); }
       return reply({ code: 0, data: { groups: [{ name: '普通组', models: [
         { name: ids[0], pricing: { billing_mode: 'video', per_request_price: rate } },
       ] }] } });
@@ -515,7 +516,7 @@ test('HTTP 提交前目录已核对，入队期间切换默认连接也使用对
   const submissions = [];
   const app = await createStudio({ root, imageCatalog: [], textCatalog: [], tools: { ready: false },
     videoFetcher: async (url, options) => url.endsWith('/v1/models')
-      ? reply({ data: [{ id: options.headers.Authorization === 'Bearer original-key' ? ids[1] : ids[2] }] })
+      ? reply({ data: [videoModelFixture(options.headers.Authorization === 'Bearer original-key' ? ids[1] : ids[2])] })
       : reply({ groups: [] }),
     integrations: { submit: async (savedSettings, job) => {
       submissions.push({ key: savedSettings.apiKey, model: job.model });

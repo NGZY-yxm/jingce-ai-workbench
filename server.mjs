@@ -35,6 +35,7 @@ import { SPEECH_MODELS } from './public/speech-parameters.js';
 import { AuthStore, migrateLegacyWorkspace, SESSION_COOKIE } from './lib/auth.mjs';
 import { ManagementStore } from './lib/management.mjs';
 import { managementRequest } from './lib/management-http.mjs';
+import { prepareProjectPackage, importProjectArchive } from './lib/project-package.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png' };
@@ -264,13 +265,13 @@ export async function createStudio(options = {}) {
   }
   imageCatalog = imageCatalogOrFallback(imageCatalog);
   const tools = options.tools || await toolStatus();
-  const integrations = { ...(options.integrations || {}),
+  const integrations = { ...(options.integrations || {}), skills,
     submit: options.integrations?.submit || ((settings, job, image) => submitVideo(settings, job, image, videoFetcher)),
     poll: options.integrations?.poll || ((settings, taskId) => pollVideo(settings, taskId, videoFetcher)),
     storageSettings: options.integrations?.storageSettings || (() => storage.publicSettings()),
     prepareReferences: options.integrations?.prepareReferences || ((job) => storage.prepareReferences(job)) };
   const jobs = new VideoJobs(store, integrations); await jobs.init();
-  const imageIntegrations = { ...(options.imageIntegrations || {}),
+  const imageIntegrations = { ...(options.imageIntegrations || {}), skills,
     submitImage: options.imageIntegrations?.submitImage || options.integrations?.submitImage,
     downloadImage: options.imageIntegrations?.downloadImage || options.integrations?.downloadImage };
   const imageJobs = new ImageJobs(store, imageIntegrations); await imageJobs.init();
@@ -339,6 +340,11 @@ export async function createStudio(options = {}) {
       if (route === '/api/previs/helper.zip' && ['GET', 'HEAD'].includes(method)) {
         const zip = await blenderHelperPackage(); response.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': zip.length,
           'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent('幻帧blender助手.zip') }); response.end(method === 'HEAD' ? undefined : zip); return;
+      }
+      const previsWorkspaceRoute = /^\/api\/projects\/([\w-]+)\/previs-projects$/.exec(route);
+      if (previsWorkspaceRoute) {
+        if (method === 'GET') { json(response, previs.projects(previsWorkspaceRoute[1])); return; }
+        if (method === 'POST') { json(response, await previs.createProject(previsWorkspaceRoute[1], await requestJson(request)), 201); return; }
       }
       const previsProjectRoute = /^\/api\/projects\/([\w-]+)\/previs-jobs$/.exec(route);
       if (previsProjectRoute) {
@@ -439,17 +445,23 @@ export async function createStudio(options = {}) {
         await store.mutate(state => { state.projects.push(project); return project; }); json(response, project, 201); return;
       }
       if (route === '/api/projects/import' && method === 'POST') {
+        if (['application/zip', 'application/octet-stream'].includes(String(request.headers['content-type'] || '').split(';')[0].trim())) {
+          json(response, await importProjectArchive(request, store, { skills }), 201); return;
+        }
         const project = importProject(await requestJson(request, Infinity));
         await store.mutate(state => { state.projects.push(project); return project; }); json(response, project, 201); return;
       }
-      const speechJobRoute = /^\/api\/speech-jobs\/([\w-]+)(?:\/(save|resolve))?$/.exec(route);
+      const speechJobRoute = /^\/api\/speech-jobs\/([\w-]+)(?:\/(save|resolve|restore|permanent))?$/.exec(route);
       if (speechJobRoute) {
         const [, id, operation] = speechJobRoute;
         if (!operation && method === 'GET') { json(response, publicSpeechJob(speechJobs.get(id))); return; }
+        if (!operation && method === 'DELETE') { json(response, await speechJobs.setDeleted(id, true)); return; }
+        if (operation === 'restore' && method === 'POST') { await requestJson(request); json(response, await speechJobs.setDeleted(id, false)); return; }
+        if (operation === 'permanent' && method === 'DELETE') { json(response, await speechJobs.permanentlyDelete(id)); return; }
         if (operation === 'save' && method === 'POST') { await requestJson(request); json(response, await speechJobs.retrySave(id), 202); return; }
         if (operation === 'resolve' && method === 'POST') { json(response, await speechJobs.resolve(id, await requestJson(request))); return; }
       }
-      const projectRoute = /^\/api\/projects\/([\w-]+)(?:\/(plan|export|screenplay|assets|jobs|image-jobs|speech-jobs|image-batches|batches|compose|restore|permanent))?$/.exec(route);
+      const projectRoute = /^\/api\/projects\/([\w-]+)(?:\/(plan|export|package|screenplay|assets|jobs|image-jobs|speech-jobs|image-batches|batches|compose|restore|permanent))?$/.exec(route);
       if (projectRoute) {
         const [, id, action] = projectRoute;
         if (!action && method === 'GET') { json(response, store.get(id, url.searchParams.get('includeDeleted') === '1')); return; }
@@ -471,6 +483,12 @@ export async function createStudio(options = {}) {
           })); return;
         }
         if (action === 'plan' && method === 'POST') { await requestJson(request); json(response, await store.update(id, draftPlan)); return; }
+        if (action === 'package' && method === 'GET') {
+          const archive = await prepareProjectPackage(store, id, { skills, chatImages });
+          response.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': archive.size, 'Cache-Control': 'no-store',
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(archive.name)}` });
+          await pipeline(archive.stream(), response); return;
+        }
         if (action === 'export' && method === 'GET') {
           response.setHeader('Content-Disposition', `attachment; filename="jingce-${id}.json"`);
           json(response, exportProject(store.get(id))); return;
@@ -480,7 +498,7 @@ export async function createStudio(options = {}) {
           response.end(screenplay(store.get(id))); return;
         }
         if (action === 'assets' && method === 'POST') { json(response, await upload(request, store, id), 201); return; }
-        if (action === 'speech-jobs' && method === 'GET') { store.get(id); json(response, speechJobs.list(id)); return; }
+        if (action === 'speech-jobs' && method === 'GET') { store.get(id); json(response, speechJobs.list(id, url.searchParams.get('includeDeleted') === '1')); return; }
         if (action === 'speech-jobs' && method === 'POST') { json(response, await speechJobs.start(id, await requestJson(request)), 202); return; }
         if (action === 'jobs' && method === 'GET') {
           store.get(id); json(response, jobs.list(id, url.searchParams.get('includeDeleted') === '1')); return;
@@ -558,7 +576,7 @@ export async function createStudio(options = {}) {
       if (imageRetry && method === 'POST') { await requestJson(request); json(response, await imageJobs.retry(imageRetry[1])); return; }
       const imageRecord = /^\/api\/image-jobs\/([\w-]+)(?:\/(restore|permanent))?$/.exec(route);
       if (imageRecord && !imageRecord[2] && method === 'DELETE') { json(response, await imageJobs.setDeleted(imageRecord[1], true)); return; }
-      if (imageRecord?.[2] === 'permanent' && method === 'DELETE') { json(response, await store.permanentlyDeleteJob(imageRecord[1], 'image', id => imageJobs.busy.has(id))); return; }
+      if (imageRecord?.[2] === 'permanent' && method === 'DELETE') { json(response, await store.permanentlyDeleteJob(imageRecord[1], 'image', id => imageJobs.busy.has(id) || imageJobs.busy.has(`${id}:save`))); return; }
       if (imageRecord?.[2] === 'restore' && method === 'POST') { await requestJson(request); json(response, await imageJobs.setDeleted(imageRecord[1], false)); return; }
             const retry = /^\/api\/jobs\/([\w-]+)\/query$/.exec(route);
       if (retry && method === 'POST') { const input = await requestJson(request); json(response, await jobs.retryLookup(retry[1], input.taskId)); return; }

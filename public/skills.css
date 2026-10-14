@@ -66,3 +66,12 @@
   .skills-commands button { flex: 1; justify-content: center; padding: 9px 10px; font-size: 12px; white-space: nowrap; }
   .text-chat-toolbar .chat-skill-control { margin-top: 10px; }
 }
+
+.generation-skill-control { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.generation-skill-control label { flex: 1; min-width: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.generation-skill-control select { width: 100%; min-width: 0; margin: 0; }
+.generation-skill-note { margin: 6px 0 12px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.generation-skill-note[hidden] { display: none; }
+.canvas-composer .generation-skill-control { margin-top: 8px; }
+.canvas-composer .generation-skill-note { font-size: 11px; }
+.canvas-composer .generation-skill-control .skill-manage-button { min-height: 34px; }

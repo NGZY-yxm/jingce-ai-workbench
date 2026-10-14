@@ -52,3 +52,46 @@ test('本地 HTTP 语音流程：静态模块、私密配置、只读音色、�
   assert.equal((await send('/api/speech-jobs/' + first.id + '/save', 'POST', {})).status, 202);
   assert.equal(requests.filter(request => request.url.endsWith('/t2a_v2')).length, 2);
 });
+
+
+test('配音 HTTP 删除、已删除列表、恢复和彻底删除，清理后旧操作返回 410', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'jingce-speech-delete-http-')); let calls = 0;
+  const app = await createStudio({ root, catalog: [], imageCatalog: [], textCatalog: [], tools: { ready: false, message: '模拟环境' },
+    speechFetcher: async () => { calls++; return jsonReply(speechReply()); } });
+  const url = await app.start(0);
+  t.after(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
+  const bootstrap = await (await fetch(url + '/api/bootstrap')).json();
+  const headers = { 'Content-Type': 'application/json', 'X-Studio-Token': bootstrap.token };
+  const send = (route, method = 'GET', body) => fetch(url + route, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  await app.store.saveSpeechSettings({ apiKey: 'delete-http-fixture-key', model: 'speech-2.8-hd', region: 'domestic' });
+  const project = await (await send('/api/projects', 'POST', { title: '配音删除 HTTP 验证' })).json();
+  const route = `/api/projects/${project.id}/speech-jobs`;
+  const input = { operationId: 'http-operation-delete', text: '可删除的配音', format: 'wav', voiceId: 'fixture-voice' };
+  const job = await (await send(route, 'POST', input)).json();
+  await until(() => app.speechJobs.get(job.id).state === 'done' && !app.speechJobs.busy.has(job.id));
+  const saved = app.store.get(project.id), asset = saved.assets[0], jobRoute = '/api/speech-jobs/' + job.id;
+  assert.equal((await fetch(url + jobRoute, { method: 'DELETE' })).status, 403);
+  assert.equal((await send(jobRoute + '/permanent', 'DELETE')).status, 409);
+  const deletion = await send(jobRoute, 'DELETE'); assert.equal(deletion.status, 200); assert.ok((await deletion.json()).deletedAt);
+  assert.deepEqual(await (await send(route)).json(), []);
+  const deleted = await (await send(route + '?includeDeleted=1')).json(); assert.equal(deleted.length, 1); assert.ok(deleted[0].deletedAt);
+  assert.ok((await (await send(jobRoute)).json()).deletedAt);
+  assert.equal((await send('/api/assets/' + asset.id)).status, 200, '可恢复删除保留音频文件');
+  assert.equal((await (await send(route, 'POST', input)).json()).id, job.id);
+  assert.equal((await send(jobRoute + '/restore', 'POST', {})).status, 200);
+  assert.equal((await (await send(route)).json()).length, 1);
+  assert.equal(app.store.get(project.id).assets[0].deletedAt, null);
+  assert.equal((await send(`/api/projects/${project.id}/assets/${asset.id}`, 'DELETE')).status, 200);
+  assert.ok((await (await send(route + '?includeDeleted=1')).json())[0].deletedAt, '兼容原素材删除流程');
+  const permanent = await send(jobRoute + '/permanent', 'DELETE'); assert.equal(permanent.status, 200);
+  assert.equal((await permanent.json()).cleanupPending, 0);
+  assert.deepEqual(await (await send(route + '?includeDeleted=1')).json(), []);
+  assert.equal((await send(jobRoute)).status, 404);
+  assert.equal((await send(jobRoute + '/restore', 'POST', {})).status, 404);
+  assert.equal((await send('/api/assets/' + asset.id)).status, 404);
+  assert.equal((await send(route, 'POST', input)).status, 410);
+  for (const file of [path.join(root, 'assets', asset.file), app.speechJobs.resultFile(job.id), app.speechJobs.connectionFile(job.id)]) {
+    await assert.rejects(readFile(file), { code: 'ENOENT' });
+  }
+  assert.equal(calls, 1, '删除、恢复、彻底删除以及旧操作重放均不再次调用模型');
+});

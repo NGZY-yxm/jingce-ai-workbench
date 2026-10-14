@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Store } from '../lib/store.mjs';
 import { SpeechJobs } from '../lib/speech-jobs.mjs';
 import { SpeechProviderError } from '../lib/speech-provider.mjs';
-import { createProject } from '../lib/workflow.mjs';
+import { createProject, setAssetDeleted } from '../lib/workflow.mjs';
 import { waveFixture, until } from './support/speech-fixtures.mjs';
 
 const result = () => ({ audio: waveFixture(), mime: 'audio/wav', extension: '.wav', duration: 0.25, usageCharacters: 8, traceId: 'fixture-trace' });
@@ -134,4 +134,140 @@ test('语音生成卡再次生成时选用最新结果，旧音频仍保留在�
   assert.equal(saved.assets.length, 2);
   assert.ok(saved.assets.some(asset => asset.id === jobs.get(first.id).assetId));
   assert.equal(saved.graph.nodes[0].speechConfig.text, '第一段旁白。');
+});
+
+
+test('删除配音可恢复：保留音频和操作编号，断开画布引用，重启后仍保持删除状态', async t => {
+  let calls = 0;
+  const owner = await setup(t, async () => { calls++; return result(); });
+  const { jobs, store, project, root } = owner;
+  await store.update(project.id, current => {
+    current.graph.nodes.push({ id: 'deletable-audio', kind: 'audio', label: '配音卡片', assetId: '', note: '', status: 'pending' }); return current;
+  });
+  const input = request('operation-soft-delete', { nodeId: 'deletable-audio' });
+  const job = await jobs.start(project.id, input);
+  await until(() => jobs.get(job.id).state === 'done' && !jobs.busy.has(job.id));
+  const asset = store.get(project.id).assets[0];
+  assert.equal(store.get(project.id).graph.nodes[0].assetId, asset.id);
+  const deleted = await jobs.setDeleted(job.id, true);
+  assert.ok(deleted.deletedAt);
+  assert.equal(deleted.deletedAt, store.get(project.id).assets[0].deletedAt);
+  assert.equal(store.state.speechJobs[0].deletedAt, deleted.deletedAt);
+  assert.equal((await jobs.setDeleted(job.id, true)).deletedAt, deleted.deletedAt);
+  assert.equal(jobs.list(project.id).length, 0);
+  assert.equal(jobs.list(project.id, true)[0].deletedAt, store.get(project.id).assets[0].deletedAt);
+  assert.equal(store.get(project.id).graph.nodes[0].assetId, '');
+  assert.deepEqual(await readFile(path.join(root, 'assets', asset.file)), waveFixture());
+  assert.ok((await readFile(jobs.resultFile(job.id))).length);
+  assert.ok((await readFile(jobs.connectionFile(job.id))).length);
+  assert.equal((await jobs.start(project.id, input)).id, job.id);
+  assert.equal(calls, 1);
+  await jobs.close();
+  const restored = new Store(root); await restored.init();
+  owner.store = restored; owner.jobs = new SpeechJobs(restored, { synthesize: async () => { calls++; return result(); } }); await owner.jobs.init();
+  assert.equal(owner.jobs.list(project.id).length, 0);
+  assert.ok(owner.jobs.list(project.id, true)[0].deletedAt);
+  const recovered = await owner.jobs.setDeleted(job.id, false);
+  assert.equal(recovered.deletedAt, null);
+  assert.equal(owner.jobs.list(project.id).length, 1);
+  assert.equal(restored.get(project.id).assets[0].deletedAt, null);
+  assert.equal(restored.get(project.id).graph.nodes[0].assetId, '', '恢复后由用户重新放到画布');
+  assert.deepEqual(await readFile(path.join(root, 'assets', asset.file)), waveFixture());
+  assert.equal(calls, 1);
+});
+
+test('素材库中的旧配音删除记录也可恢复或彻底删除，素材库恢复后禁止直接清理音频', async t => {
+  const { jobs, store, project, root } = await setup(t);
+  const job = await jobs.start(project.id, request('operation-legacy-delete'));
+  await until(() => jobs.get(job.id).state === 'done' && !jobs.busy.has(job.id));
+  const asset = store.get(project.id).assets[0];
+  await store.update(project.id, current => setAssetDeleted(current, asset.id, true));
+  assert.equal(store.state.speechJobs[0].deletedAt, undefined);
+  assert.equal(jobs.list(project.id).length, 0);
+  assert.ok(jobs.get(job.id).deletedAt);
+  await jobs.setDeleted(job.id, false);
+  assert.equal(jobs.list(project.id).length, 1);
+  await jobs.setDeleted(job.id, true);
+  await store.update(project.id, current => setAssetDeleted(current, asset.id, false));
+  assert.equal(jobs.get(job.id).deletedAt, null);
+  assert.equal(jobs.list(project.id).length, 1);
+  await assert.rejects(jobs.permanentlyDelete(job.id), { status: 409 });
+  assert.deepEqual(await readFile(path.join(root, 'assets', asset.file)), waveFixture());
+  await store.update(project.id, current => setAssetDeleted(current, asset.id, true));
+  await jobs.permanentlyDelete(job.id);
+  assert.equal(jobs.list(project.id, true).length, 0);
+  assert.equal(store.get(project.id).assets.length, 0);
+  await assert.rejects(readFile(path.join(root, 'assets', asset.file)), { code: 'ENOENT' });
+});
+
+test('彻底删除配音只清理该任务音频、结果缓存与连接快照，旧操作重放不会再次收费', async t => {
+  let calls = 0;
+  const { jobs, store, project, root } = await setup(t, async () => { calls++; return result(); });
+  const input = request('operation-permanent-delete');
+  const first = await jobs.start(project.id, input);
+  const second = await jobs.start(project.id, request('operation-retained-audio'));
+  await until(() => jobs.list(project.id).every(job => job.state === 'done') && !jobs.busy.size);
+  const firstAsset = store.get(project.id).assets.find(asset => asset.jobId === first.id);
+  const secondAsset = store.get(project.id).assets.find(asset => asset.jobId === second.id);
+  await assert.rejects(jobs.permanentlyDelete(first.id), { status: 409 });
+  await jobs.setDeleted(first.id, true);
+  const deleted = await jobs.permanentlyDelete(first.id);
+  assert.equal(deleted.cleanupPending, 0);
+  assert.equal(jobs.list(project.id, true).length, 1);
+  assert.equal(store.get(project.id).assets.length, 1);
+  assert.throws(() => jobs.get(first.id), { status: 404 });
+  for (const file of [path.join(root, 'assets', firstAsset.file), jobs.resultFile(first.id), jobs.connectionFile(first.id)]) {
+    await assert.rejects(readFile(file), { code: 'ENOENT' });
+  }
+  assert.deepEqual(await readFile(path.join(root, 'assets', secondAsset.file)), waveFixture());
+  assert.ok((await readFile(jobs.resultFile(second.id))).length);
+  assert.ok((await readFile(jobs.connectionFile(second.id))).length);
+  await assert.rejects(jobs.start(project.id, input), { status: 410 });
+  await assert.rejects(jobs.setDeleted(first.id, false), { status: 404 });
+  await assert.rejects(jobs.permanentlyDelete(first.id), { status: 404 });
+  const restarted = new Store(root); await restarted.init();
+  assert.equal(restarted.state.speechJobs.length, 1);
+  const restartedJobs = new SpeechJobs(restarted, { synthesize: async () => { calls++; return result(); } });
+  await assert.rejects(restartedJobs.start(project.id, input), { status: 410 });
+  assert.equal(calls, 2);
+});
+
+test('生成、保存、待核对和本地忙碌的配音不允许删除或彻底删除', async t => {
+  const { jobs, store, project } = await setup(t);
+  const job = await jobs.start(project.id, request('operation-delete-guards'));
+  await until(() => jobs.get(job.id).state === 'done' && !jobs.busy.has(job.id));
+  const assetId = jobs.get(job.id).assetId;
+  await jobs.close();
+  for (const state of ['waiting', 'submitting', 'saving', 'save_pending', 'uncertain']) {
+    await store.mutate(current => { current.speechJobs[0].state = state; });
+    await assert.rejects(jobs.setDeleted(job.id, true), { status: 409 });
+    await store.update(project.id, current => setAssetDeleted(current, assetId, true));
+    await assert.rejects(jobs.permanentlyDelete(job.id), { status: 409 });
+    await store.update(project.id, current => setAssetDeleted(current, assetId, false));
+  }
+  await store.mutate(current => { current.speechJobs[0].state = 'done'; });
+  jobs.busy.add(job.id);
+  await assert.rejects(jobs.setDeleted(job.id, true), { status: 409 });
+  await store.update(project.id, current => setAssetDeleted(current, assetId, true));
+  await assert.rejects(jobs.permanentlyDelete(job.id), { status: 409 });
+  jobs.busy.delete(job.id);
+  assert.equal(store.state.speechJobs.length, 1);
+});
+
+test('配音清理中断会保存待清理文件队列，重启后清理音频及缓存', async t => {
+  const { jobs, store, project, root } = await setup(t);
+  const job = await jobs.start(project.id, request('operation-cleanup-recovery'));
+  await until(() => jobs.get(job.id).state === 'done' && !jobs.busy.has(job.id));
+  const asset = store.get(project.id).assets[0];
+  await jobs.setDeleted(job.id, true);
+  store.cleanupDeletedFiles = async () => { throw new Error('模拟清理中断'); };
+  assert.equal((await jobs.permanentlyDelete(job.id)).cleanupPending, 3);
+  assert.equal(store.state.speechJobs.length, 0);
+  assert.equal(store.get(project.id).assets.length, 0);
+  assert.deepEqual(await readFile(path.join(root, 'assets', asset.file)), waveFixture());
+  const restored = new Store(root); await restored.init();
+  assert.equal(restored.state.pendingFileDeletes.length, 0);
+  for (const file of [path.join(root, 'assets', asset.file), jobs.resultFile(job.id), jobs.connectionFile(job.id)]) {
+    await assert.rejects(readFile(file), { code: 'ENOENT' });
+  }
 });

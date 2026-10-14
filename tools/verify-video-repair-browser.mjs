@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { createStudio } from '../server.mjs';
+import { catalogForVideoModelIds, DEFAULT_CONNECTION, submitVideo } from '../lib/video-v3.mjs';
+const require=createRequire(import.meta.url);
+const {chromium}=require(process.env.JINGCE_PLAYWRIGHT_MODULE || 'playwright');
+const out=path.resolve('outputs/video-repair-browser');await mkdir(out,{recursive:true});
+const root=await mkdtemp(path.join(out,'fixture-'));
+const name='minimax-h3-933-2K（次）',key='browser-only-fake-key';
+const report={checks:[],mockSubmissions:0,externalRequests:[],browserErrors:[]};let app,browser;
+try {
+ app=await createStudio({root,catalog:catalogForVideoModelIds([name]),imageCatalog:[],textCatalog:[],tools:{ready:false},
+  integrations:{submit:(settings,job)=>submitVideo(settings,job,undefined,async()=>{
+   report.mockSubmissions++;return new Response(JSON.stringify({error:{code:'unsupported_duration',message:'测试接口拒绝参数 '+key,param:'duration'}}),{status:400,headers:{'x-request-id':'fixture-request-400','content-type':'application/json'}});
+  })}});
+ await app.store.saveSettings({...DEFAULT_CONNECTION,apiKey:key,videoModel:name});
+ const url=await app.start(0),bootstrap=await(await fetch(url+'/api/bootstrap')).json();
+ const api=async(route,method,body)=>{const r=await fetch(url+route,{method,headers:{'Content-Type':'application/json','X-Studio-Token':bootstrap.token},body:JSON.stringify(body)});const d=await r.json();assert.ok(r.ok,JSON.stringify(d));return d;};
+ let project=await api('/api/projects','POST',{title:'视频参数与错误详情验证'});
+ project=await api('/api/projects/'+project.id,'PATCH',{revision:project.revision,scenes:[{id:'clip',title:'小猪骑士',videoModel:name,videoPrompt:'原创小猪骑士跳舞',generationDuration:11,resolution:'720p',duration:5}],graph:{nodes:[{id:'video-card',kind:'video',label:'小猪骑士',x:200,y:100,sceneId:'clip'}],links:[],viewport:{x:0,y:0,zoom:1}}});
+ browser=await chromium.launch({headless:true,channel:'msedge'});
+ const context=await browser.newContext({viewport:{width:1440,height:1050}});
+ await context.route('**/*',route=>{if(new URL(route.request().url()).origin!==url){report.externalRequests.push(route.request().url());return route.abort();}return route.continue();});
+ const page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageerror',e=>report.browserErrors.push(e.message));page.on('dialog',dialog=>dialog.accept());
+ await page.addInitScript(id=>localStorage.setItem('jingce-active-project',id),project.id);
+ await page.goto(url);await page.locator('[data-view="videos"]').first().click();
+ const card=page.locator('[data-scene-id="clip"]');const generate=card.locator('[data-scene-action="generate"]');
+ assert.equal(await generate.isDisabled(),true);assert.match(await generate.textContent(),/请确认模型参数/);
+ assert.equal(await card.locator('[data-scene-field="generationDuration"]').isDisabled(),true);
+ await page.screenshot({path:path.join(out,'01-parameters-pending.png'),fullPage:true});report.checks.push('Unknown model parameters block generation and show pending status');
+ await card.locator('[data-model-capability="video"]').click();
+ const dialog=page.locator('#model-capability-dialog');await dialog.waitFor({state:'visible'});
+ const res=dialog.locator('[data-capability-field="resolutions"]');assert.equal(await res.inputValue(),'');
+ await res.fill('720p');await res.press('Tab');
+ const duration=dialog.locator('[data-duration-resolution="720p"]');await duration.fill('5,10');
+ await dialog.locator('[type="submit"]').click();await page.waitForFunction(()=>document.querySelector('#model-capability-dialog [data-message]').textContent.includes('已保存'));
+ await dialog.locator('[data-close]').click();
+ const choices=await card.locator('[data-scene-field="generationDuration"] option').evaluateAll(nodes=>nodes.map(n=>n.value));assert.deepEqual(choices,['5','10']);assert.equal(await generate.isDisabled(),false);report.checks.push('Entering resolution adds duration field; saved 5/10 seconds enables only declared combinations');
+ await page.locator('#canvas-tab').click();const canvasCard=page.locator('[data-node-id="video-card"]');
+ assert.equal(await canvasCard.locator('[data-card-action="generate"]').isDisabled(),false);
+ const canvasChoices=await canvasCard.locator('[data-shot-field="generationDuration"] option').evaluateAll(nodes=>nodes.map(n=>n.value));assert.deepEqual(canvasChoices,['5','10']);report.checks.push('Canvas and video page share the same validated parameter options');
+ await page.locator('[data-view="videos"]').first().click();await generate.click();
+ await page.waitForFunction(()=>document.body.textContent.includes('fixture-request-400'),{},{timeout:15000});
+ await page.locator('.job-diagnostics summary').click();
+ const diagnosticText=await page.locator('.job-diagnostics').textContent();assert.match(diagnosticText,/duration/);assert.match(diagnosticText,/HTTP 状态：400/);assert.match(diagnosticText,/fixture-request-400/);assert.ok(!(await page.locator('body').textContent()).includes(key));
+ await page.screenshot({path:path.join(out,'02-error-details.png'),fullPage:true});report.checks.push('Mock HTTP 400 displays sanitized field, error code and provider request ID');
+ await card.locator('[data-model-capability="video"]').click();await dialog.locator('[data-reset]').click();await page.waitForFunction(()=>document.querySelector('#model-capability-dialog [data-message]').textContent.includes('已清除'));await dialog.locator('[data-close]').click();
+ assert.equal(await generate.isDisabled(),true);report.checks.push('Removing supplements restores blocked state');
+ assert.equal(report.mockSubmissions,1);assert.deepEqual(report.externalRequests,[]);assert.deepEqual(report.browserErrors,[]);
+ await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
+}finally{if(browser)await browser.close();if(app)await app.close();if(path.dirname(root)!==out)throw Error('Invalid fixture cleanup target');await rm(root,{recursive:true,force:true});}

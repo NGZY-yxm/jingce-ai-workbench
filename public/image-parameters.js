@@ -142,7 +142,7 @@ export function normalizeImageConfig(value = {}, fallbackModel = '') {
     return selected;
   };
   if (typeof value.prompt === 'string' && value.prompt.trim().length > 4000) throw new Error('图片提示词最多 4000 个字符。');
-  return { model: clean(value.model || fallbackModel, 120), prompt: clean(value.prompt, 4000),
+  return { model: clean(value.model || fallbackModel, 120), prompt: clean(value.prompt, 4000), ...(clean(value.skillId, 100) ? { skillId: clean(value.skillId, 100) } : {}),
     ratio: option('ratio', IMAGE_RATIOS), quality: option('quality', IMAGE_QUALITIES), style: option('style', IMAGE_STYLES), count: normalizeImageCount(value.count) };
 }
 
@@ -192,7 +192,7 @@ export function imageRequestIssue(config, inputs = {}, modelRecord) {
   if (modelRecord?.capabilities) {
     const c=modelRecord.capabilities;
     if (config.ratio && config.ratio !== 'auto' && !c.ratios.includes(config.ratio)) return '当前模型不支持所选图片比例。';
-    if (config.quality && config.quality !== 'auto' && !c.qualities.includes(config.quality)) return '当前模型不支持所选图片画质。';
+    if (!c.qualities.includes(config.quality || 'auto')) return '当前模型不支持所选图片画质。';
     if (references.length>c.totalLimit) return '当前模型参考素材合计最多 ' + c.totalLimit + ' 份。';
   }
   if (references.length > IMAGE_REFERENCE_MAX) return '每次最多使用 ' + IMAGE_REFERENCE_MAX + ' 张参考图片。';

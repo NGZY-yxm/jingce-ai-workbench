@@ -12,7 +12,7 @@ function writeLocal(type, id, value) { try { const key = scopedStorageKey(storag
 export function createSpeechWorkspace(bridge) {
   const $ = selector => document.querySelector(selector), form = $('#speech-form');
   const state = bridge.getState;
-  let projectId = '', jobs = [], voices = [], pending = null, target = { nodeId: '', sceneId: '' }, submitBusy = false, refreshBusy = false;
+  let projectId = '', jobs = [], voices = [], pending = null, target = { nodeId: '', sceneId: '' }, submitBusy = false, refreshBusy = false, showDeletedJobs = false;
   const fields = ['model', 'text', 'voiceId', 'speed', 'vol', 'pitch', 'emotion', 'format', 'name'];
   const message = (text, error = false, selector = '#speech-message') => { $(selector).textContent = text; $(selector).classList.toggle('error', error); };
   const report = error => { message(error.message, true); bridge.toast(error.message, true); };
@@ -76,8 +76,9 @@ export function createSpeechWorkspace(bridge) {
     $('#speech-voice-picker').innerHTML = '<option value="">手动填写 Voice ID</option>' + voices.map(voice => `<option value="${escapeHtml(voice.id)}">${escapeHtml(voice.name)}${voice.type === 'system' ? '' : voice.type === 'cloned' ? ' · 复刻音色' : ' · 设计音色'}</option>`).join('');
     $('#speech-voice-picker').value = voices.some(voice => voice.id === selected) ? selected : '';
     const voice = voices.find(item => item.id === selected);
-    $('#speech-voice-description').textContent = voice ? `${voice.description || voice.id}${voice.type === 'system' ? '' : '；首次使用可能产生额外费用，请核对平台价格。'}`
-      : '可读取账户音色，也可手动填写已有音色 ID。默认 ID 来自官方示例。';
+    const description = $('#speech-voice-description');
+    description.textContent = voice ? `${voice.description || voice.id}${voice.type === 'system' ? '' : '；首次使用费用以平台为准。'}` : '';
+    description.hidden = !description.textContent;
   }
   function renderNarrations() {
     const selected = $('#speech-scene-picker').value;
@@ -85,38 +86,48 @@ export function createSpeechWorkspace(bridge) {
     if (selected === 'all' || state().project?.scenes.some(scene => scene.id === selected)) $('#speech-scene-picker').value = selected;
   }
   function jobMarkup(job) {
-    const asset = state().project?.assets.find(item => item.id === job.assetId && !item.deletedAt), r = job.request;
-    return `<div class="speech-job-header"><strong>${escapeHtml(r.name)}</strong><span class="speech-job-state">${labels[job.state] || job.state}</span></div>
-      <p class="speech-job-message">${escapeHtml(job.message)}</p>
-      ${asset ? `<audio controls preload="none" src="/api/assets/${encodeURIComponent(asset.id)}" aria-label="试听${escapeHtml(asset.name)}"></audio><div class="speech-job-actions"><button type="button" data-speech-place="${escapeHtml(job.id)}">放到画布 ↗</button><a href="/api/assets/${encodeURIComponent(asset.id)}?download=1" download>下载 ${r.format.toUpperCase()} ↓</a><button type="button" class="project-danger" data-speech-delete="${escapeHtml(job.id)}">删除语音</button></div>` : job.state === 'done' ? '<p class="speech-job-message">素材已删除，可在素材库中恢复。</p>' : ''}
+    const asset = !job.deletedAt && state().project?.assets.find(item => item.id === job.assetId && !item.deletedAt), r = job.request;
+    const settled = ['done', 'failed'].includes(job.state);
+    return `<div class="speech-job-header"><strong>${escapeHtml(r.name)}</strong><span class="speech-job-state">${job.deletedAt ? '已删除' : labels[job.state] || job.state}</span></div>
+      <p class="speech-job-message">${escapeHtml(job.deletedAt ? '删除的配音可恢复，也可彻底删除。' : job.message)}</p>
+      ${job.deletedAt ? `<div class="speech-job-actions"><button type="button" data-speech-restore="${escapeHtml(job.id)}"${settled ? '' : ' disabled'}>恢复</button><button type="button" class="project-danger" data-speech-permanent="${escapeHtml(job.id)}"${settled ? '' : ' disabled'}>彻底删除</button></div>`
+        : asset ? `<audio controls preload="none" src="/api/assets/${encodeURIComponent(asset.id)}" aria-label="试听${escapeHtml(asset.name)}"></audio><div class="speech-job-actions"><button type="button" data-speech-place="${escapeHtml(job.id)}">放到画布 ↗</button><a href="/api/assets/${encodeURIComponent(asset.id)}?download=1" download>下载 ${r.format.toUpperCase()} ↓</a><button type="button" class="project-danger" data-speech-delete="${escapeHtml(job.id)}">删除</button></div>`
+        : settled ? `<div class="speech-job-actions"><button type="button" class="project-danger" data-speech-delete="${escapeHtml(job.id)}">删除记录</button></div>` : ''}
       ${job.state === 'save_pending' ? `<div class="speech-job-actions"><button type="button" data-speech-save="${escapeHtml(job.id)}">重试保存已有音频</button></div>` : ''}
       ${job.state === 'uncertain' ? `<div class="speech-job-actions"><button type="button" data-speech-resolve="${escapeHtml(job.id)}">已核对平台，结束记录</button></div>` : ''}
       <details><summary>文案与任务详情</summary><dl><dt>模型</dt><dd>${escapeHtml(r.model)}</dd><dt>音色</dt><dd>${escapeHtml(r.voiceId)}</dd><dt>参数</dt><dd>语速 ${r.speed} · 音量 ${r.vol} · 音调 ${r.pitch} · ${escapeHtml(SPEECH_EMOTIONS.find(([id]) => id === r.emotion)?.[1] || '自动')}</dd><dt>提交时间</dt><dd>${escapeHtml(new Date(job.createdAt).toLocaleString('zh-CN'))}</dd>${job.duration !== null ? `<dt>时长</dt><dd>${Number(job.duration).toFixed(2)} 秒</dd>` : ''}${job.usageCharacters !== null ? `<dt>计费字符</dt><dd>${job.usageCharacters}（平台返回）</dd>` : ''}${job.traceId ? `<dt>平台追踪号</dt><dd>${escapeHtml(job.traceId)}</dd>` : ''}<dt>任务编号</dt><dd>${escapeHtml(job.id)}</dd></dl><p>${escapeHtml(r.text)}</p></details>`;
   }
   function renderJobs() {
     const list = $('#speech-job-list'), existing = new Map([...list.querySelectorAll('[data-speech-job]')].map(card => [card.dataset.speechJob, card]));
-    const visibleJobs = jobs.filter(job => !state().project?.assets.some(asset => asset.id === job.assetId && asset.deletedAt));
+    const currentJobs = jobs.map(job => {
+      const asset = state().project?.assets.find(item => item.id === job.assetId);
+      return { ...job, deletedAt: asset ? asset.deletedAt || null : job.deletedAt || null };
+    });
+    const deletedCount = currentJobs.filter(job => job.deletedAt).length;
+    const visibleJobs = currentJobs.filter(job => Boolean(job.deletedAt) === showDeletedJobs);
+    $('#speech-toggle-deleted').textContent = showDeletedJobs ? '返回配音任务' : `已删除配音（${deletedCount}）`;
+    $('#speech-toggle-deleted').setAttribute('aria-pressed', String(showDeletedJobs));
     const active = visibleJobs.filter(job => activeStates.includes(job.state)).length;
-    $('#speech-job-count').textContent = `${visibleJobs.length} 个任务${active ? ` · ${active} 个处理中` : ''}`;
+    $('#speech-job-count').textContent = showDeletedJobs ? `${visibleJobs.length} 条已删除配音` : `${visibleJobs.length} 个任务${active ? ` · ${active} 个处理中` : ''}`;
     list.querySelector('.speech-empty')?.remove();
     visibleJobs.forEach((job, index) => {
       let card = existing.get(job.id);
       if (!card) { card = document.createElement('article'); card.className = 'speech-job'; card.dataset.speechJob = job.id; }
       const content = jobMarkup(job);
       if (card._speechContent !== content) { card.innerHTML = content; card._speechContent = content; }
-      card.dataset.state = job.state;
+      card.dataset.state = job.state; card.dataset.deleted = String(Boolean(job.deletedAt));
       if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
       existing.delete(job.id);
     });
     existing.forEach(card => card.remove());
-    if (!visibleJobs.length) list.innerHTML = '<div class="speech-empty"><strong>第一段配音，从这里开始</strong>填写文案并提交，音频会保存到工程素材库。<br>可以连续提交多个任务。</div>';
+    if (!visibleJobs.length) list.innerHTML = showDeletedJobs ? '<div class="speech-empty"><strong>暂无已删除配音</strong>删除的配音会显示在这里，可以恢复或彻底删除。</div>' : '<div class="speech-empty"><strong>第一段配音，从这里开始</strong>填写文案并提交，音频会保存到工程素材库。<br>可以连续提交多个任务。</div>';
     bridge.onJobsChanged?.(jobs);
   }
   function render() {
     renderModelChoices(); renderConnection();
     const id = state().project?.id || '';
     if (id !== projectId) {
-      projectId = id; jobs = []; pending = id ? readLocal('pending', id) : null;
+      projectId = id; jobs = []; showDeletedJobs = false; pending = id ? readLocal('pending', id) : null;
       const saved = id ? readLocal('draft', id) : null;
       form.reset();
       form.elements.model.innerHTML = (state().speechCatalog || SPEECH_MODELS).map(model => `<option>${escapeHtml(model)}</option>`).join('');
@@ -137,7 +148,7 @@ export function createSpeechWorkspace(bridge) {
     if (id !== projectId) { render(); return; }
     refreshBusy = true;
     try {
-      const next = await bridge.api(`/api/projects/${id}/speech-jobs`);
+      const next = await bridge.api(`/api/projects/${id}/speech-jobs?includeDeleted=1`);
       if (id !== state().project?.id) return;
       jobs = next;
       if (pending && jobs.some(job => job.operationId === pending.operationId)) { pending = null; writeLocal('pending', id, null); message('已找回上次提交的配音任务，可以继续生成。'); }
@@ -199,22 +210,37 @@ export function createSpeechWorkspace(bridge) {
   function openSettings() {
     bridge.openConnections();
   }
+  $('#speech-toggle-deleted').onclick = () => { showDeletedJobs = !showDeletedJobs; renderJobs(); };
   $('#speech-refresh-jobs').onclick = () => refresh().catch(report);
+  async function refreshProject(id) {
+    const project = await bridge.api(`/api/projects/${id}`);
+    if (id === state().project?.id) bridge.adoptRemote(project);
+    await refresh();
+  }
   $('#speech-job-list').onclick = async event => {
     const button = event.target.closest('button'); if (!button || button.disabled) return;
-    const id = button.dataset.speechPlace || button.dataset.speechSave || button.dataset.speechResolve || button.dataset.speechDelete;
+    const id = button.dataset.speechPlace || button.dataset.speechSave || button.dataset.speechResolve || button.dataset.speechDelete || button.dataset.speechRestore || button.dataset.speechPermanent;
     const job = jobs.find(item => item.id === id); if (!job) return;
     button.disabled = true;
     try {
       if (button.dataset.speechDelete) {
-        const projectId = state().project?.id;
-        const asset = state().project?.assets.find(item => item.id === job.assetId && !item.deletedAt);
-        if (!asset || job.state !== 'done') throw new Error('语音不可用，请刷新后再试。');
-        if (!window.confirm('删除这段语音？语音会移到已删除素材，可在素材库恢复。相关画布引用会断开，原任务记录保留，不会再次生成或收费。')) return;
+        const projectId = job.projectId;
+        if (!window.confirm('删除这条配音？配音会移到已删除配音，可随时恢复。相关画布引用会断开。')) return;
         await bridge.flush();
-        const project = await bridge.api(`/api/projects/${projectId}/assets/${asset.id}`, 'DELETE');
-        if (projectId === state().project?.id) bridge.adoptRemote(project);
-        renderJobs(); bridge.toast('语音已删除，可在素材库的已删除素材中恢复。');
+        await bridge.api(`/api/speech-jobs/${id}`, 'DELETE');
+        await refreshProject(projectId); bridge.toast('配音已删除，可在已删除配音中恢复。');
+      }
+      if (button.dataset.speechRestore) {
+        await bridge.flush();
+        await bridge.api(`/api/speech-jobs/${id}/restore`, 'POST', {});
+        await refreshProject(job.projectId); bridge.toast('配音已恢复，可试听或重新放到画布。');
+      }
+      if (button.dataset.speechPermanent) {
+        if (!window.confirm('彻底删除这条配音？\n\n将删除配音任务记录、音频文件和本地缓存，删除后无法恢复。')) return;
+        await bridge.flush();
+        const result = await bridge.api(`/api/speech-jobs/${id}/permanent`, 'DELETE');
+        await refreshProject(job.projectId);
+        bridge.toast(result.cleanupPending ? '配音已彻底删除，待清理文件将在重启后继续清理。' : '配音已彻底删除。');
       }
       if (button.dataset.speechPlace) {
         const asset = state().project.assets.find(item => item.id === job.assetId && !item.deletedAt);

@@ -35,9 +35,12 @@
 :root[data-theme] #creative-canvas::after { display: none; }
 :root[data-theme] #canvas-viewport {
   background-color: var(--canvas-ui-ground);
-  background-image: radial-gradient(circle, var(--canvas-ui-dot) .8px, transparent 1px);
+  background-image: radial-gradient(circle,
+    color-mix(in srgb, var(--canvas-ui-dot) calc(var(--canvas-dot-opacity, 1) * 100%), transparent) .8px,
+    transparent 1px);
   background-size: var(--canvas-dot-size, 24px) var(--canvas-dot-size, 24px);
 }
+:root[data-theme] #canvas-viewport[data-grid-visibility="hidden"] { background-image: none; }
 :root[data-theme] #creative-canvas .canvas-toolbar {
   min-height: 51px;
   padding: 9px 15px;
@@ -340,8 +343,6 @@
   background: var(--canvas-ui-soft);
   border-color: var(--canvas-ui-border);
 }
-:root[data-theme] #creative-canvas .canvas-details-content .shot-references:has(.shot-reference-empty),
-:root[data-theme] #creative-canvas .canvas-details-content .image-inputs:has(> .shot-hint) { display: none; }
 :root[data-theme] #creative-canvas .canvas-details-content .image-control-note,
 :root[data-theme] #creative-canvas .canvas-details-content .image-capability-summary,
 :root[data-theme] #creative-canvas .canvas-details-content .image-detail-heading > span,
@@ -446,7 +447,12 @@
   display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0;
   border: 0; border-radius: 50%; font-size: 0; background: var(--canvas-ui-ink); color: var(--canvas-ui-surface); box-shadow: none;
 }
-:root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit::after { content: '\2191'; font-size: 21px; line-height: 1; }
+:root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit::after {
+  content: ''; width: 24px; height: 24px; background: currentColor; transform: translateY(-1px);
+  --composer-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 19V5m-6 6 6-6 6 6' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  -webkit-mask: var(--composer-arrow) center / contain no-repeat;
+  mask: var(--composer-arrow) center / contain no-repeat;
+}
 :root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit:hover { background: var(--canvas-ui-accent); }
 :root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit:disabled { opacity: .38; cursor: not-allowed; }
 :root[data-theme] #creative-canvas .canvas-composer .canvas-composer-submit:focus-visible { outline: 2px solid var(--canvas-ui-accent); outline-offset: 3px; }
@@ -490,34 +496,60 @@
   :root[data-theme] #creative-canvas .cover-card .canvas-hover-details { transition: none; }
 }
 
-/* Every empty or text-based cover uses the same quiet frosted surface. */
+/* Default covers share translucent glass; media previews retain their detail. */
 :root[data-theme="night"] #creative-canvas {
-  --canvas-frost-fill: #282c30c4;
-  --canvas-frost-light: #f0f5ff14;
-  --canvas-frost-shade: #10121624;
+  --canvas-frost-fill: #2b30369e;
+  --canvas-frost-light: #f0f5ff0f;
+  --canvas-frost-shade: #1012161f;
   --canvas-frost-edge: #c9d2dd27;
-  --canvas-frost-sheen: #ffffff16;
+  --canvas-frost-sheen: #ffffff1c;
   --canvas-frost-ink: #e3e8ee;
   --canvas-frost-icon: #adb9c8;
-  --canvas-frost-grain: .075;
+  --canvas-frost-grain: .055;
 }
 :root[data-theme="day"] #creative-canvas {
-  --canvas-frost-fill: #ffffffbe;
-  --canvas-frost-light: #ffffffc2;
-  --canvas-frost-shade: #dce4ed38;
+  --canvas-frost-fill: #ffffffa3;
+  --canvas-frost-light: #ffffff59;
+  --canvas-frost-shade: #dce4ed2e;
   --canvas-frost-edge: #a6b5c445;
-  --canvas-frost-sheen: #ffffffdf;
+  --canvas-frost-sheen: #ffffff75;
   --canvas-frost-ink: #354453;
   --canvas-frost-icon: #728497;
-  --canvas-frost-grain: .11;
+  --canvas-frost-grain: .07;
 }
-:root[data-theme] #creative-canvas .cover-card:has(.canvas-frosted-placeholder) {
+:root[data-theme] #creative-canvas .canvas-node.cover-card {
   border-color: var(--canvas-frost-edge);
-  box-shadow: 0 7px 24px #00000012;
+  box-shadow: inset 0 1px 0 var(--canvas-frost-sheen), 0 7px 24px #00000012;
 }
-:root[data-theme] #creative-canvas .cover-card:has(.canvas-frosted-placeholder):is(.selected,.details-open) {
+:root[data-theme] #creative-canvas .canvas-node.cover-card:is(.selected,.details-open) {
   border-color: var(--canvas-ui-selection);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas-ui-selection) 25%, transparent), 0 10px 28px #0000001a;
+}
+/* A light glaze covers thumbnails without blurring the media itself. */
+:root[data-theme] #creative-canvas .cover-card .canvas-cover:has(> .canvas-media) {
+  background: var(--canvas-frost-fill);
+  backdrop-filter: blur(20px) saturate(.7);
+  -webkit-backdrop-filter: blur(20px) saturate(.7);
+}
+:root[data-theme] #creative-canvas .cover-card .canvas-cover > .canvas-media {
+  background: transparent;
+  opacity: .94;
+}
+:root[data-theme] #creative-canvas .cover-card .canvas-cover:has(> .canvas-media)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--canvas-frost-sheen) 18%, transparent),
+    transparent 48%, color-mix(in srgb, var(--canvas-frost-shade) 35%, transparent));
+  box-shadow: inset 0 1px 0 var(--canvas-frost-sheen);
+}
+:root[data-theme] #creative-canvas .cover-card:is(.media-active,.is-playing) .canvas-cover > .canvas-media {
+  opacity: 1;
+}
+:root[data-theme] #creative-canvas .cover-card:is(.media-active,.is-playing) .canvas-cover::after {
+  display: none;
 }
 :root[data-theme] #creative-canvas .cover-card .canvas-cover:has(> .canvas-frosted-placeholder) {
   display: flex;
@@ -583,3 +615,59 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Reference thumbnails are the persistent inventory; @ search floats over the editor. */
+:root[data-theme] #creative-canvas .reference-mention-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  width: min(320px, 100%);
+  max-height: var(--reference-menu-max-height, 160px);
+  margin: 0;
+  border-color: var(--canvas-ui-border);
+  border-radius: 8px;
+  background: var(--canvas-ui-surface);
+  box-shadow: var(--canvas-ui-shadow);
+}
+:root[data-theme] #creative-canvas .reference-mention-menu[data-placement="overlay"] {
+  top: auto;
+  bottom: var(--reference-menu-bottom, 6px);
+}
+:root[data-theme] #creative-canvas .reference-mention-heading {
+  padding: 5px 8px;
+  border-color: var(--canvas-ui-border);
+  color: var(--canvas-ui-muted);
+  font-size: 10px;
+}
+:root[data-theme] #creative-canvas .reference-mention-menu > button {
+  gap: 6px;
+  padding: 6px 8px;
+  color: var(--canvas-ui-ink);
+  background: var(--canvas-ui-surface);
+}
+:root[data-theme] #creative-canvas .reference-mention-menu > button:is(:hover,.active) { background: var(--canvas-ui-soft); }
+:root[data-theme] #creative-canvas .reference-mention-menu > button > span:last-child { display: flex; align-items: center; gap: 8px; }
+:root[data-theme] #creative-canvas .reference-mention-menu strong { flex: 0 0 auto; white-space: nowrap; }
+:root[data-theme] #creative-canvas .reference-mention-menu small { color: var(--canvas-ui-muted); }
+:root[data-theme] #creative-canvas .reference-mention-icon { width: 20px; height: 20px; border-radius: 4px; font-size: 13px; background: var(--canvas-ui-soft); }
+:root[data-theme] #creative-canvas .shot-reference-heading { flex-wrap: wrap; }
+:root[data-theme] #creative-canvas .shot-reference-heading :is(strong,small) { color: var(--canvas-ui-muted); }
+:root[data-theme] #creative-canvas .compact-image-references .image-reference-row > .canvas-reference-insert,
+:root[data-theme] #creative-canvas .compact-reference-list .shot-reference-item > .canvas-reference-insert {
+  position: relative;
+  display: block;
+  flex: 1 0 100%;
+  width: 100%;
+  min-width: 0;
+  height: 64px;
+  padding: 2px;
+  overflow: hidden;
+  border: 1px solid var(--canvas-ui-border);
+  border-radius: 7px;
+  background: var(--canvas-ui-surface);
+}
+:root[data-theme] #creative-canvas .canvas-reference-insert > .shot-reference-thumb { width: 100%; height: 100%; background: var(--canvas-ui-soft); }
+:root[data-theme] #creative-canvas .canvas-reference-insert > .reference-number { top: auto; bottom: 6px; left: 6px; }
+:root[data-theme] #creative-canvas .canvas-reference-insert:hover { border-color: var(--canvas-ui-accent); }
+:root[data-theme] #creative-canvas .canvas-reference-insert:focus-visible { outline: 2px solid var(--canvas-ui-accent); outline-offset: 2px; }

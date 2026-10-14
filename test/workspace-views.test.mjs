@@ -13,7 +13,7 @@ import * as promptMentions from '../public/prompt-mentions.js';
 import * as promptEditor from '../public/prompt-editor.js';
 import * as imageParameters from '../public/image-parameters.js';
 import { renderTextMarkdown } from '../public/text-markdown.js';
-import { createSkillLibrary, skillOptions } from '../public/skills.js';
+import { createSkillLibrary, skillOptions, generationSkillIssue, generationSkillNote, generationSkillControl } from '../public/skills.js';
 import { imageHistoryContent } from '../public/chat-images.js';
 import { createPrevisWorkflow } from '../public/previs.js';
 import { thumbnailUrl, assetThumbnailUrl } from '../public/media-thumbnails.js';
@@ -124,8 +124,8 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
   }
   function fieldElement(selector, name) {
     const ids = {
-      '#image-page-form': { model: '#image-page-model', prompt: '#image-page-prompt', count: '#image-page-count', quality: '#image-page-quality' },
-      '#image-form': { model: '#image-model', prompt: '#image-prompt', sceneId: '#image-scene-id', count: '#image-count', quality: '#image-quality' },
+      '#image-page-form': { model: '#image-page-model', prompt: '#image-page-prompt', count: '#image-page-count', quality: '#image-page-quality', skillId: '#image-page-skill' },
+      '#image-form': { model: '#image-model', prompt: '#image-prompt', sceneId: '#image-scene-id', count: '#image-count', quality: '#image-quality', skillId: '#image-skill' },
     };
     return element(ids[selector]?.[name] || selector + ' [name="' + name + '"]');
   }
@@ -161,7 +161,7 @@ async function pageHarness({ respond, confirm = () => true } = {}) {
   }
   const context = vm.createContext({ document, window: { addEventListener() {}, confirm }, Blob, URL: { createObjectURL: () => 'blob:test-archive', revokeObjectURL() {} }, JSZip: Zip,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, structuredClone, console,
-    ...videoParameters, ...referenceModel, ...referenceApi, ...promptMentions, ...promptEditor, ...imageParameters, renderTextMarkdown, createSkillLibrary, skillOptions, imageHistoryContent, thumbnailUrl, assetThumbnailUrl, capabilitySummary, createCapabilityEditor, createAssetCanvasNode, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }),
+    ...videoParameters, ...referenceModel, ...referenceApi, ...promptMentions, ...promptEditor, ...imageParameters, renderTextMarkdown, createSkillLibrary, skillOptions, generationSkillIssue, generationSkillNote, generationSkillControl, imageHistoryContent, thumbnailUrl, assetThumbnailUrl, capabilitySummary, createCapabilityEditor, createAssetCanvasNode, createPrevisWorkflow, createSpeechWorkspace: () => ({ render() {}, async refresh() {}, open() {}, openSettings() {} }),
     createInfiniteCanvas: value => { bridge = value; return canvas; }, setTimeout: () => 1, clearTimeout() {},
     crypto: { randomUUID: () => 'operation-' + ++sequence },
     fetch: async (url, options = {}) => {
@@ -888,7 +888,7 @@ test('独立图片页提交使用图片接口并刷新任务，不依赖视频�
   const submitted = h.requests.filter(request => request.method === 'POST');
   assert.equal(submitted.length, 1);
   assert.equal(submitted[0].url, '/api/projects/' + h.state.project.id + '/image-jobs');
-  assert.deepEqual(submitted[0].body, { sceneId: '', model: 'image-b', prompt: '夜晚书店门口', count: 1, referenceAssetIds: [], operationId: 'operation-1' });
+  assert.deepEqual(submitted[0].body, { sceneId: '', model: 'image-b', prompt: '夜晚书店门口', skillId: '', count: 1, referenceAssetIds: [], operationId: 'operation-1' });
   assert.equal(submitted[0].headers['X-Studio-Token'], 'frontend-test-token');
   assert.equal(h.state.imageJobs[0].id, created.id);
   assert.equal(h.state.imageJobs[0].assetId, asset.id);
@@ -977,13 +977,16 @@ test('视频任务从 running 轮询到 done 时加载已保存素材并自动�
 });
 
 
-test('页面移除合成成片和工程导出入口，保留生成结果分类及时间排序', async () => {
+test('页面提供工程分享包入口，保留生成结果分类及时间排序', async () => {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   for (const id of ['compose-video', 'bgm-asset', 'composition-summary', 'export-list',
     'export-project', 'delivery-export', 'script-download']) {
     assert.equal(html.includes('id="' + id + '"'), false, '不再显示旧工作台入口：' + id);
   }
-  assert.doesNotMatch(html, /合成并导出|合成成片|导出工程(?: JSON)?/);
+  assert.doesNotMatch(html, /合成并导出|合成成片/);
+  assert.match(html, /id="export-project-package"[^>]*>[\s\S]*?导出工程包<\/button>/);
+  assert.match(html, /id="canvas-import-project"/);
+  assert.match(html, /id="import-input"[^>]*accept="\.zip,\.json,/);
   const sort = html.match(/<select\b[^>]*id="result-sort"[^>]*>([\s\S]*?)<\/select>/)?.[1];
   assert.ok(sort, '生成结果应提供时间排序控件');
   assert.deepEqual([...sort.matchAll(/<option\b[^>]*value="([^"]*)"/g)].map(match => match[1]), ['newest', 'oldest']);
@@ -1260,7 +1263,7 @@ test('图片页选择三张并使用上传和生成参考图，一次提交后�
   const posts = h.requests.filter(request => request.method === 'POST');
   assert.equal(posts.length, 1);
   assert.deepEqual(posts[0].body, { sceneId: '', model: 'gpt-image-2.5-flare', prompt: batch.jobs[0].prompt,
-    count: 3, referenceAssetIds: [uploaded.id, generated.id], operationId: 'operation-1', config: { quality: '2k' } });
+    skillId: '', count: 3, referenceAssetIds: [uploaded.id, generated.id], operationId: 'operation-1', config: { quality: '2k' } });
   assert.deepEqual(Array.from(h.state.imageJobs, job => job.id), batch.jobs.map(job => job.id),
     '轮询尚未返回时也应将批次展开为三个任务');
   assert.equal(h.state.imageJobs.some(job => Array.isArray(job.jobs)), false, '批次外壳不能作为任务记录');
@@ -1305,6 +1308,7 @@ test('图片批次提交确认中断后按 batchOperationId 找回全部原任�
   assert.equal(h.state.imageOperations.size, 1);
   assert.equal(h.requests.filter(request => request.method === 'POST').length, 1);
   assert.ok(batch.jobs.every(job => job.operationId !== 'operation-1'), '子任务操作编号必须不同于原批次编号');
+  h.state.imageSkillId = 'deleted-skill'; h.element('#image-page-skill').value = 'deleted-skill';
   await form.fire('submit', { preventDefault() {} });
   await until(() => /已找到原图片任务/.test(h.element('#image-page-message').textContent) && !submit.disabled);
   assert.deepEqual(Array.from(h.state.imageJobs, job => job.id), batch.jobs.map(job => job.id));
@@ -1334,7 +1338,7 @@ test('单张旧弹窗兼容单 job 响应，保留 sceneId 且不带入独立图
   const posts = h.requests.filter(request => request.method === 'POST');
   assert.equal(posts.length, 1);
   assert.deepEqual(posts[0].body, { sceneId: scene.id, model: 'image-b', prompt: scene.imagePrompt,
-    count: 1, referenceAssetIds: [], operationId: 'operation-1', config: { quality: '2k' } });
+    skillId: '', count: 1, referenceAssetIds: [], operationId: 'operation-1', config: { quality: '2k' } });
   assert.deepEqual(Array.from(h.state.imageJobs, item => item.id), [job.id]);
   assert.equal(h.element('#image-dialog').open, false);
   assert.deepEqual(h.state.project.scenes, [scene]);
@@ -1476,4 +1480,70 @@ test('跨工程结果详情和素材恢复使用素材所属工程', async () =>
   assert.equal(h.requests.at(-1).url, '/api/projects/project-b/assets/' + deletedId + '/restore');
   assert.equal(h.state.project.id, first.id, '跨工程恢复不应切换当前工程');
   assert.equal(h.state.projects.find(project => project.id === second.id).assets.find(asset => asset.id === deletedId).deletedAt, null);
+});
+
+
+for (const kind of ['video', 'image']) test(`${kind} 已删除的未完成任务可确认彻底删除，取消和接口失败会保留原记录`, async () => {
+  const collection = kind === 'image' ? 'imageJobs' : 'jobs';
+  const route = kind === 'image' ? 'image-jobs' : 'jobs';
+  const id = kind + '-deleted-active';
+  const permanentSelector = kind === 'image' ? '[data-permanent-image-job]' : '[data-permanent-job]';
+  const dataset = kind === 'image' ? { permanentImageJob: id } : { permanentJob: id };
+  let allow = false, fail = false, records = [], confirmations = [];
+  const h = await pageHarness({ confirm: message => { confirmations.push(message); return allow; },
+    respond: async (request, current) => {
+      if (request.method === 'DELETE') {
+        assert.equal(request.url, `/api/${route}/${id}/permanent`);
+        if (fail) return { $status: 503, error: '暂时无法删除，请重试。' };
+        records = [];
+        return { id, trackingPending: true, cleanupPending: 0 };
+      }
+      if (request.url.endsWith(`/${route}?includeDeleted=1`)) return records;
+      return current.state.project;
+    } });
+  records = [{ id, projectId: h.state.project.id, state: kind === 'image' ? 'uncertain' : 'running', model: 'test-model',
+    prompt: '已删除的生成任务', createdAt: '2026-10-14T00:00:00Z', deletedAt: '2026-10-14T00:01:00Z', message: '任务处理中' }];
+  await (kind === 'image' ? h.refreshImageJobs() : h.refreshJobs());
+  await h.element(kind === 'image' ? '#toggle-deleted-image-jobs' : '#toggle-deleted-jobs').click();
+  const list = h.element(kind === 'image' ? '#image-job-list' : '#job-list');
+  const button = list.innerHTML.match(new RegExp(`<button[^>]*data-permanent-${kind === 'image' ? 'image-' : ''}job="${id}"[^>]*>`));
+  assert.ok(button, '已删除任务提供彻底删除按钮');
+  assert.doesNotMatch(button[0], /disabled/);
+  await list.fire('click', { target: delegatedTarget(permanentSelector, dataset) });
+  assert.equal(h.requests.filter(request => request.method === 'DELETE').length, 0);
+  assert.equal(h.state[collection].length, 1);
+  allow = true; fail = true;
+  await list.fire('click', { target: delegatedTarget(permanentSelector, dataset) });
+  await until(() => h.requests.some(request => request.method === 'DELETE'));
+  assert.equal(h.state[collection].length, 1);
+  fail = false;
+  await list.fire('click', { target: delegatedTarget(permanentSelector, dataset) });
+  await until(() => h.state[collection].length === 0);
+  assert.doesNotMatch(list.innerHTML, new RegExp(id));
+  assert.ok(confirmations.every(message => /无法恢复/.test(message) && /跟踪结果/.test(message)));
+});
+
+
+test('Blender 新建预演工程通过真实应用状态合并子工程列表，创作工程身份保持一致', async () => {
+  const h = await pageHarness({ respond: async (request, current) => {
+    if (request.url.endsWith('/previs-projects') && request.method === 'POST') return {
+      ...current.state.project, revision: current.state.project.revision + 1,
+      previsProjects: [{ id: 'default', title: '预演工程 1' }, { id: 'second-previs', title: request.body.title }],
+    };
+    if (request.url.includes('/previs-jobs')) return [];
+    if (request.url.startsWith('/api/previs/tools')) return { ready: false, blender: { message: '' }, ffmpeg: { message: '' } };
+    return current.state.project;
+  } });
+  const originalId = h.state.project.id;
+  h.setView('previs');
+  await h.element('#previs-new-project').fire('click');
+  assert.equal(h.element('#previs-new-dialog').open, true);
+  assert.equal(h.element('#new-dialog').open, false);
+  h.element('#previs-new-title').value = '第二镜头';
+  await h.element('#previs-new-form').fire('submit');
+  await until(() => h.element('#previs-project-select').value === 'second-previs');
+  assert.equal(h.state.project.id, originalId);
+  assert.equal(h.state.project.previsProjects.length, 2);
+  assert.equal(h.element('#previs-new-dialog').open, false);
+  assert.equal(h.requests.filter(request => request.url === '/api/projects' && request.method === 'POST').length, 0);
 });
