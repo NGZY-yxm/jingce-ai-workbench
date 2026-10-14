@@ -5,10 +5,14 @@
   "type": "module",
   "license": "LicenseRef-Jingce-NonCommercial",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.22"
   },
   "scripts": {
     "start": "node server.mjs --open",
     "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "nodemailer": "^10.1.0"
   }
 }

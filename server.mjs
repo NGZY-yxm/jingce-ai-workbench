@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { readFile, stat, rename, unlink } from 'node:fs/promises';
+import { readFile, readdir, stat, rename, unlink } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
 import { randomUUID, randomBytes, timingSafeEqual, createHash } from 'node:crypto';
@@ -32,6 +32,9 @@ import { VoiceJobs, publicVoiceJob } from './lib/voice-jobs.mjs';
 import { VOICE_RECORDING_LIMIT } from './public/voice-parameters.js';
 import { normalizeSpeechSettings, publicSpeechSettings, listSpeechVoices } from './lib/speech-provider.mjs';
 import { SPEECH_MODELS } from './public/speech-parameters.js';
+import { AuthStore, migrateLegacyWorkspace, SESSION_COOKIE } from './lib/auth.mjs';
+import { ManagementStore } from './lib/management.mjs';
+import { managementRequest } from './lib/management-http.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png' };
@@ -113,6 +116,7 @@ async function upload(request, store, projectId) {
 }
 
 export async function createStudio(options = {}) {
+  if (options.multiUser) return createGateway(options);
   const root = options.root || path.join(directory, 'runtime');
   const publicOrigin = options.publicOrigin ?? process.env.JINGCE_PUBLIC_ORIGIN ?? '';
   if (publicOrigin) {
@@ -120,7 +124,8 @@ export async function createStudio(options = {}) {
     try { const url = new URL(publicOrigin); valid = url.protocol === 'https:' && url.origin === publicOrigin; } catch { /* Reject malformed configuration. */ }
     if (!valid) throw new InputError('JINGCE_PUBLIC_ORIGIN 需要是完整的 HTTPS 网站来源，不含路径或结尾斜线。');
   }
-  const store = new Store(root); await store.init();
+  const store = new Store(root, { onStateSaved: options.onStateSaved, getProjectLimit: options.getProjectLimit }); await store.init();
+  await options.onStateSaved?.(store.state);
   const previs = new PrevisJobs(store, options.previs || {}); await previs.init();
   const skills = new SkillLibrary(root); await skills.init();
   const chatImages = new ChatImages(store, options.chatImages); await chatImages.init();
@@ -273,7 +278,7 @@ export async function createStudio(options = {}) {
   const speechJobs = new SpeechJobs(store, { ...options.speechIntegrations, fetcher: speechFetcher }); await speechJobs.init();
   const voiceJobs = new VoiceJobs(store, { ...options.voiceIntegrations, fetcher: speechFetcher }); await voiceJobs.init();
   const token = randomBytes(32).toString('hex');
-  let currentPort = 0;
+  let currentPort = options.internal ? Number(options.gatewayPort || 18970) : 0;
   const exportBusy = new Set();
   async function submissionCatalog(projectId, input) {
     // A retry of the same operation must still return its saved task when the
@@ -290,7 +295,7 @@ export async function createStudio(options = {}) {
     response.setHeader('Referrer-Policy', 'same-origin');
     response.setHeader('X-Frame-Options', 'DENY');
     try {
-      const allowedHosts = new Set([`127.0.0.1:${currentPort}`, `localhost:${currentPort}`]);
+      const allowedHosts = new Set([`127.0.0.1:${currentPort}`, `localhost:${currentPort}`, options.gatewayHost].filter(Boolean));
       if (!allowedHosts.has(request.headers.host)) throw new InputError('只接受本机地址访问。', 403);
       const origin = request.headers.origin;
       if ((origin && origin !== publicOrigin && ![...allowedHosts].some(host => origin === `http://${host}`)) || request.headers['sec-fetch-site'] === 'cross-site') {
@@ -729,16 +734,20 @@ export async function createStudio(options = {}) {
         const model = rawModel.split(settings.apiKey || '\0').join('[已隐藏密钥]')
           .split(settings.apiKey ? encodeURIComponent(settings.apiKey) : '\0').join('[已隐藏密钥]').slice(0, 160);
         const record = async outcome => {
+          const ledger = { requestId, projectId: input.projectId || '', projectTitle: input.projectId ? store.get(input.projectId, true).title : '',
+            model, startedAt: new Date(started).toISOString(), finishedAt: new Date().toISOString(), ...outcome };
+          await options.onTextRecord?.(ledger);
           // Keep metadata only; never persist prompts, replies, headers or keys.
           await atomicJson(path.join(root, 'text-last-request.json'), {
             requestId, model, stream: false, startedAt: new Date(started).toISOString(),
             finishedAt: new Date().toISOString(), elapsedMs: Date.now() - started, ...outcome,
           }).catch(() => {});
         };
+        await record({ status: 'running' });
         try {
           const result = await chatText(settings, input, textFetcher);
           const images = await chatImages.record(requestId, input.projectId || '', result.images);
-          await record({ status: 'done', httpStatus: 200, code: '', finishReason: result.finishReason, answerLength: result.content.length, imageCount: images.length });
+          await record({ status: 'done', httpStatus: 200, code: '', finishReason: result.finishReason, answerLength: result.content.length, imageCount: images.length, usage: result.usage });
           json(response, { ...result, images, requestId });
         } catch (error) {
           const status = error instanceof InputError ? error.status : 500;
@@ -790,7 +799,7 @@ export async function createStudio(options = {}) {
     }
   });
   server.requestTimeout = 20 * 60 * 1000; // Larger previews may upload over a slower home connection.
-  return { store, jobs, imageJobs, previs, speechJobs, voiceJobs, server,
+  return { store, jobs, imageJobs, previs, speechJobs, voiceJobs, server, token,
     async start(port = 18970) {
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
       currentPort = server.address().port;
@@ -799,6 +808,130 @@ export async function createStudio(options = {}) {
       return `http://127.0.0.1:${currentPort}`;
     },
     async close() { clearInterval(imageCatalogTimer);videoCatalogSync.close(); jobs.close(); imageJobs.close(); await previs.close(); await speechJobs.close(); await voiceJobs.close(); await capabilitySave;await skills.pending;await store.pending; await new Promise(resolve => server.close(resolve)); },
+  };
+}
+
+const STATIC_ROUTES = new Set(['/', '/miraframe-logo.png', '/index.html', '/style.css', '/app.js', '/lucide.js', '/ai-text.js', '/skills.js', '/skills.css', '/yaml.js', '/jszip.js', '/chat-images.js', '/text-markdown.js', '/marked.js', '/video-parameters.js', '/image-parameters.js', '/model-capabilities.js', '/model-link-rules.js', '/capability-editor.js', '/canvas.js', '/canvas-geometry.js', '/canvas-layout.js', '/canvas-gravity.js', '/canvas.css', '/canvas-reference-ui.css', '/liblib-theme.css', '/reference-model.js', '/reference-api.js', '/prompt-mentions.js', '/prompt-editor.js', '/previs.js', '/previs-spec.js', '/previs-revision.js', '/previs.css', '/speech.js', '/speech.css', '/speech-parameters.js', '/voice-studio.js', '/voice-parameters.js', '/media-thumbnails.js']);
+
+async function createGateway(options = {}) {
+  STATIC_ROUTES.add('/management.js'); STATIC_ROUTES.add('/management.css');
+  // Version the entire module graph together so cached modules cannot bypass a new login flow.
+  const assetHash = createHash('sha256');
+  const assetNames = (await readdir(path.join(directory, 'public'))).filter(name => /\.(?:js|css)$/.test(name)).sort();
+  for (const name of assetNames) assetHash.update(name).update(await readFile(path.join(directory, 'public', name)));
+  const assetVersion = assetHash.digest('hex').slice(0, 16);
+  const runtimeRoot = options.root || path.join(directory, 'runtime');
+  const management = new ManagementStore(runtimeRoot, options.management);
+  await management.init();
+  const auth = new AuthStore(runtimeRoot, { ...options.auth, accounts: management });
+  await auth.init();
+  for (const user of auth.db.prepare('SELECT id,email,username FROM users WHERE email IS NOT NULL').all()) management.ensureMember(user);
+  // Import existing task metadata without opening providers or resubmitting jobs.
+  for (const entry of await readdir(path.join(runtimeRoot, 'users')).catch(error => { if (error.code === 'ENOENT') return []; throw error; })) {
+    if (!/^\d+$/.test(entry) || !management.member(Number(entry))) continue;
+    const saved = await readFile(path.join(runtimeRoot, 'users', entry, 'projects.json'), 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (saved) management.syncTasks(Number(entry), JSON.parse(saved));
+  }
+  const globalStorage = new CosStorage(runtimeRoot, null);
+  const contexts = new Map();
+  const contextPromises = new Map();
+  const publicOrigin = options.publicOrigin ?? process.env.JINGCE_PUBLIC_ORIGIN ?? '';
+  const gatewayHost = options.gatewayHost || `127.0.0.1:${options.gatewayPort || process.env.JINGCE_PORT || 18970}`;
+  if (publicOrigin) {
+    let valid = false;
+    try { const parsed = new URL(publicOrigin); valid = parsed.protocol === 'https:' && parsed.origin === publicOrigin; } catch { /* Reject malformed configuration. */ }
+    if (!valid) throw new InputError('JINGCE_PUBLIC_ORIGIN 需要是完整的 HTTPS 网站来源，不含路径或结尾斜线。');
+  }
+  let currentPort = 0;
+  const publicHost = publicOrigin ? new URL(publicOrigin).host : '';
+  async function contextFor(session) {
+    const userId = Number(session.userId);
+    if (contexts.has(userId)) return contexts.get(userId);
+    if (!contextPromises.has(userId)) contextPromises.set(userId, (async () => {
+      const userRoot = auth.userRoot(userId);
+      if (userId === auth.legacyUserId || (!auth.legacyUserId && session.email === auth.legacyEmail)) await migrateLegacyWorkspace(auth, userRoot);
+      const app = await createStudio({ ...options, multiUser: false, root: userRoot, internal: true, gatewayHost, gatewayPort: currentPort, publicOrigin,
+        storage: { ...options.storage, configRoot: runtimeRoot, namespace: `users/${userId}` },
+        getProjectLimit: () => management.settings.maxProjects,
+        onStateSaved: state => management.syncTasks(userId, state), onTextRecord: record => management.recordText(userId, record) });
+      contexts.set(userId, app);
+      contextPromises.delete(userId);
+      return app;
+    })().catch(error => { contextPromises.delete(userId); throw error; }));
+    return contextPromises.get(userId);
+  }
+  function setCookie(response, value) { response.setHeader('Set-Cookie', value); }
+  async function serveStatic(request, response, route) {
+    const filename = path.join(directory, 'public', route === '/' ? 'index.html' : route.slice(1));
+    try { await stat(filename); } catch { json(response, { error: '资源不存在。' }, 404); return; }
+    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' http://127.0.0.1:18973; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    response.writeHead(200, { 'Content-Type': contentTypes[path.extname(filename)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    if (request.method === 'HEAD') { response.end(); return; }
+    let body = await readFile(filename);
+    if (route === '/' || route === '/index.html') {
+      body = Buffer.from(body.toString('utf8')
+        .replace('<body>', '<body data-auth-gateway="1">')
+        .replace('</head>', '<link rel="stylesheet" href="/management.css"></head>')
+        .replace('id="auth-screen" class="auth-screen" hidden', 'id="auth-screen" class="auth-screen"')
+        .replace('<aside class="sidebar">', '<aside class="sidebar" hidden>')
+        .replace('<main class="workspace">', '<main class="workspace" hidden>')
+        .replace(/((?:src|href)="\/[^"?]+\.(?:js|css))"/g, `$1?v=${assetVersion}"`));
+    } else if (route.endsWith('.js')) {
+      body = Buffer.from(body.toString('utf8').replace(/(\bfrom\s*['"]|\bimport\s*(?:\(\s*)?['"])(\.\/[^'"?]+\.js)(['"])/g,
+        `$1$2?v=${assetVersion}$3`));
+    }
+    response.end(body);
+  }
+  const server = http.createServer(async (request, response) => {
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Referrer-Policy', 'same-origin');
+    response.setHeader('X-Frame-Options', 'DENY');
+    try {
+      const url = new URL(request.url, `http://${gatewayHost}`); const route = url.pathname; const method = request.method;
+      if (STATIC_ROUTES.has(route) && ['GET', 'HEAD'].includes(method)) { await serveStatic(request, response, route); return; }
+      if (route === '/api/shutdown') { json(response, { error: '这个地址不存在。' }, 404); return; }
+      const host = String(request.headers.host || '');
+      const allowedHosts = new Set([gatewayHost, publicHost, `127.0.0.1:${currentPort}`, `localhost:${currentPort}`].filter(value => value && !value.endsWith(':0')));
+      if (!allowedHosts.has(host)) { json(response, { error: '只接受本站地址访问。' }, 403); return; }
+      const origin = String(request.headers.origin || '');
+      if ((origin && origin !== publicOrigin) || request.headers['sec-fetch-site'] === 'cross-site') { json(response, { error: '请求来源不被允许。' }, 403); return; }
+      if (route === '/api/site' && method === 'GET') { json(response, { siteName: management.settings.siteName, supportText: management.settings.supportText,
+        registrationEnabled: management.settings.registrationEnabled, maintenance: management.settings.maintenance, maintenanceMessage: management.settings.maintenanceMessage }); return; }
+      if (route === '/api/auth/reset-code' && method === 'POST') { json(response, await auth.resetCode((await requestJson(request)).email, request.headers['x-real-ip'] || request.socket.remoteAddress)); return; }
+      if (route === '/api/auth/reset-password' && method === 'POST') { json(response, await auth.resetPassword(await requestJson(request))); return; }
+      if (route === '/api/auth/me' && method === 'GET') {
+        const session = await auth.current(request); if (!session) { json(response, { error: '请先登录。' }, 401); return; }
+        json(response, { id: Number(session.userId), username: session.username, nickname: session.nickname, email: session.email, isAdmin: Boolean(session.isAdmin) }); return;
+      }
+      if (route === '/api/auth/login' && method === 'POST') {
+        const input = await requestJson(request); const result = await auth.login(input.email, input.password, request.headers['x-real-ip'] || request.socket.remoteAddress, request.headers['user-agent']); setCookie(response, auth.cookie(result.token)); json(response, result.user); return;
+      }
+      if (['/api/auth/verification-code', '/api/auth/register'].includes(route) && !management.settings.registrationEnabled) throw new InputError('本站暂时关闭新用户注册，已有账号可正常登录。', 403);
+      if (route === '/api/auth/verification-code' && method === 'POST') { json(response, await auth.verificationCode((await requestJson(request)).email, request.headers['x-real-ip'] || request.socket.remoteAddress)); return; }
+      if (route === '/api/auth/register' && method === 'POST') {
+        const input = await requestJson(request); const result = await auth.register(input, request.headers['x-real-ip'] || request.socket.remoteAddress, request.headers['user-agent']); setCookie(response, auth.cookie(result.token)); json(response, result.user, 201); return;
+      }
+      if (route === '/api/auth/logout' && method === 'POST') { await auth.logout(request); setCookie(response, auth.clearCookie()); response.writeHead(204); response.end(); return; }
+      const session = await auth.current(request);
+      if (!session) { json(response, { error: '请先登录。' }, 401); return; }
+      if (await managementRequest({ request, response, url, session, management, auth, storage: globalStorage, json, requestJson })) return;
+      if (route.startsWith('/api/storage/')) throw new InputError('云存储由管理员统一配置。', 403);
+      if (!session.isAdmin && management.settings.maintenance && !['GET', 'HEAD'].includes(method)) throw new InputError(management.settings.maintenanceMessage || '网站正在维护，请稍后再试。', 503);
+      const app = await contextFor(session);
+      if (method === 'POST' && ['/api/projects', '/api/projects/import'].includes(route) && app.store.list().length >= management.settings.maxProjects) throw new InputError('已达到工程数量上限，请整理已有工程或联系管理员。', 409);
+      request.headers.host = gatewayHost;
+      if (!origin && host === publicHost) request.headers.origin = publicOrigin;
+      request.headers['x-studio-token'] = app.token;
+      app.server.emit('request', request, response);
+    } catch (error) {
+      if (response.headersSent || response.destroyed) return;
+      json(response, { error: error.status ? error.message : '操作未完成，请重试。' }, error.status || 500);
+    }
+  });
+  server.requestTimeout = 20 * 60 * 1000;
+  return { server, auth, contexts, management,
+    async start(port = 18970) { await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); }); currentPort = server.address().port; return `http://127.0.0.1:${currentPort}`; },
+    async close() { for (const app of contexts.values()) await app.close(); await new Promise(resolve => server.close(resolve)); auth.close(); management.close(); },
   };
 }
 
@@ -813,6 +946,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     const port = Number(process.env.JINGCE_PORT || 18970);
     const runtimeRoot = path.join(directory, 'runtime');
+    if (process.env.JINGCE_MULTI_USER === '1') {
+      const app = await createStudio({ root: runtimeRoot, multiUser: true, publicOrigin: process.env.JINGCE_PUBLIC_ORIGIN || 'https://dream.beibeihai.xyz' });
+      const url = await app.start(port);
+      process.once('SIGINT', () => app.close().then(() => process.exit(0)));
+      process.once('SIGTERM', () => app.close().then(() => process.exit(0)));
+      console.log(`\n幻帧 MiraFrame AI 视频工作台已启动：${url}\n多用户认证已启用。`);
+      if (process.argv.includes('--open')) openBrowser(url);
+    } else {
     const { readOwnedSession, startSharedStudio } = await import('./tools/share/start-studio.mjs');
     const ownedSession = await readOwnedSession({ runtimeRoot });
     if (ownedSession) {
@@ -827,6 +968,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     console.log(`\n${started.reused ? '工作台已经启动' : '幻帧 MiraFrame AI 视频工作台已启动'}：${started.url}\n只在本机运行。关闭此窗口可以停止服务。\n`);
     if (process.argv.includes('--open')) openBrowser(started.url);
+    }
     }
   } catch (error) {
     console.error(error.code === 'EADDRINUSE' ? '端口已占用：如果工作台已经启动，请打开 http://127.0.0.1:18970 。' : '启动失败，请检查 runtime 数据目录及 Node.js 安装。');

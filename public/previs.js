@@ -8,13 +8,14 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': 
 export function createPrevisWorkflow({ document, api, getState, flush, toast, onProjectUpdate, onUseVideo, onPlaceAsset }) {
   const $ = selector => document.querySelector(selector);
   const storage = globalThis.localStorage;
+  const scopedStorageKey = key => globalThis.__jingceUserId ? `jingce-user:${globalThis.__jingceUserId}:${key}` : key;
   const origin = globalThis.location?.origin || 'http://127.0.0.1';
   const localPage = ['127.0.0.1', 'localhost', '[::1]'].includes(globalThis.location?.hostname || '127.0.0.1');
   let projectId = '', jobs = [], tools = null, loading = false, busy = false, sceneVersion = 0, helperToken = '', jobMarkup = '';
   let chatHistory = [], chatVersions = [], chatProposal = null, chatSource = null, sceneEstablished = false;
   const draftCache = new Map(), pendingChatRequests = new Set();
   const saving = new Set();
-  try { helperToken = storage?.getItem('jingce-blender-helper-token') || ''; } catch { /* The current page can still pair. */ }
+  function loadHelperToken() { try { helperToken = storage?.getItem(scopedStorageKey('jingce-blender-helper-token')) || ''; } catch { /* The current page can still pair. */ } }
   const useHelper = () => !localPage || Boolean($('#previs-use-helper')?.checked);
   const message = (text = '', error = false) => { const element = $('#previs-message'); if (element) { element.textContent = text; element.classList.toggle('error', error); } };
   const chatMessage = (text = '', error = false) => { const element = $('#previs-chat-status'); if (element) { element.textContent = text; element.classList.toggle('error', error); } };
@@ -28,14 +29,14 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
   const lastAssistant = () => chatHistory.findLast(item => item.role === 'assistant');
   function storedDraft(id) {
     if (draftCache.has(id)) return draftCache.get(id);
-    let value; try { value = JSON.parse(storage?.getItem('jingce-previs-draft:' + id) || 'null'); } catch {}
+    let value; try { value = JSON.parse(storage?.getItem(scopedStorageKey('jingce-previs-draft:' + id)) || 'null'); } catch {}
     value = value && typeof value === 'object' ? value : {};
     draftCache.set(id, value); return value;
   }
   function persistDraft(id, value) {
     if (!id) return;
     draftCache.set(id, value);
-    try { storage?.setItem('jingce-previs-draft:' + id, JSON.stringify(value)); } catch { /* The current page keeps its draft. */ }
+    try { storage?.setItem(scopedStorageKey('jingce-previs-draft:' + id), JSON.stringify(value)); } catch { /* The current page keeps its draft. */ }
   }
   function saveDraft() {
     if (!projectId) return;
@@ -187,7 +188,7 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
     try { response = await fetch(helperUrl + route, { method, mode: 'cors', headers: { 'X-Jingce-Helper-Token': helperToken, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(raw ? 10 * 60 * 1000 : 15000) }); }
     catch { throw new Error('无法连接本机 幻帧blender助手。请启动助手，并允许浏览器访问本地网络，然后点击“连接本机助手”。'); }
-    if (!response.ok) { const value = await response.json().catch(() => ({})); if (response.status === 403) { helperToken = ''; try { storage?.removeItem('jingce-blender-helper-token'); } catch {} } throw new Error(value.error || '本机助手操作未完成。'); }
+    if (!response.ok) { const value = await response.json().catch(() => ({})); if (response.status === 403) { helperToken = ''; try { storage?.removeItem(scopedStorageKey('jingce-blender-helper-token')); } catch {} } throw new Error(value.error || '本机助手操作未完成。'); }
     return raw ? response : response.json();
   }
   function renderTools() {
@@ -235,7 +236,7 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
       if (!response.ok) throw new Error('助手拒绝了连接，请在助手窗口检查网站地址。');
       const result = await response.json();
       if (result.state === 'connected') {
-        helperToken = result.token; try { storage?.setItem('jingce-blender-helper-token', helperToken); } catch {}
+        helperToken = result.token; try { storage?.setItem(scopedStorageKey('jingce-blender-helper-token'), helperToken); } catch {}
         await checkTools(); message('本机助手已连接，可以在幻帧 MiraFrame网站开始预演。'); return;
       }
       if (popup?.closed) throw new Error('助手窗口已关闭，请重新连接并授权。');
@@ -253,12 +254,12 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
     const spec = summary(); saveDraft(); await flush();
     if (id !== getState().project?.id) throw new Error('工程已切换，请在当前工程重新预演。');
     let operationId;
-    try { operationId = storage?.getItem('jingce-previs-operation:' + id); } catch {}
+    try { operationId = storage?.getItem(scopedStorageKey('jingce-previs-operation:' + id)); } catch {}
     operationId ||= crypto.randomUUID();
-    try { storage?.setItem('jingce-previs-operation:' + id, operationId); } catch {}
+    try { storage?.setItem(scopedStorageKey('jingce-previs-operation:' + id), operationId); } catch {}
     // Retrying a lost response returns the original stored specification and task.
     const job = await api(`/api/projects/${id}/previs-jobs`, 'POST', { spec, operationId, mode: useHelper() ? 'helper' : 'server' });
-    try { storage?.removeItem('jingce-previs-operation:' + id); } catch {}
+    try { storage?.removeItem(scopedStorageKey('jingce-previs-operation:' + id)); } catch {}
     if (job.mode === 'helper' && !['done', 'failed', 'cancelled'].includes(job.state)) await beginLocal(job);
     message('预演任务已保存。完成后会生成 MP4、Blender 工程、关键帧和俯视路线图。');
     await refresh();
@@ -439,5 +440,5 @@ export function createPrevisWorkflow({ document, api, getState, flush, toast, on
     });
   });
   return { render, refresh, checkTools, hasActive: () => jobs.some(job => activeStates.has(job.state)),
-    async activate() { render(); if (!tools && (!useHelper() || helperToken)) await checkTools().catch(error => message(error.message, true)); await refresh(); } };
+    async activate() { if (!helperToken) loadHelperToken(); render(); if (!tools && (!useHelper() || helperToken)) await checkTools().catch(error => message(error.message, true)); await refresh(); } };
 }

@@ -5,8 +5,9 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character =>
 const labels = { waiting: '等待提交', submitting: '生成中', saving: '保存中', save_pending: '待保存', done: '已完成', failed: '未完成', uncertain: '需核对平台' };
 const activeStates = ['waiting', 'submitting', 'saving'];
 const storageKey = (type, id) => `jingce-speech-${type}:${id}`;
-function readLocal(type, id) { try { return JSON.parse(localStorage.getItem(storageKey(type, id)) || 'null'); } catch { return null; } }
-function writeLocal(type, id, value) { try { if (value) localStorage.setItem(storageKey(type, id), JSON.stringify(value)); else localStorage.removeItem(storageKey(type, id)); } catch {} }
+const scopedStorageKey = key => globalThis.__jingceUserId ? `jingce-user:${globalThis.__jingceUserId}:${key}` : key;
+function readLocal(type, id) { try { return JSON.parse(localStorage.getItem(scopedStorageKey(storageKey(type, id))) || 'null'); } catch { return null; } }
+function writeLocal(type, id, value) { try { const key = scopedStorageKey(storageKey(type, id)); if (value) localStorage.setItem(key, JSON.stringify(value)); else localStorage.removeItem(key); } catch {} }
 
 export function createSpeechWorkspace(bridge) {
   const $ = selector => document.querySelector(selector), form = $('#speech-form');

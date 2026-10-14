@@ -3,8 +3,9 @@ import { VOICE_RECORDING_LIMIT, VOICE_PREVIEW_LIMITS, normalizeVoiceRequest, new
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 const labels = { waiting: '等待提交', uploading: '上传中', creating: '创建中', saving: '保存中', save_pending: '待保存', done: '已创建', uncertain: '需核对平台', failed: '未完成' };
 const storageKey = (type, scope) => `jingce-voice-${type}:${scope}`;
-function readLocal(type, scope) { try { return JSON.parse(localStorage.getItem(storageKey(type, scope)) || 'null'); } catch { return null; } }
-function writeLocal(type, scope, value) { try { if (value) localStorage.setItem(storageKey(type, scope), JSON.stringify(value)); else localStorage.removeItem(storageKey(type, scope)); } catch {} }
+const scopedStorageKey = key => globalThis.__jingceUserId ? `jingce-user:${globalThis.__jingceUserId}:${key}` : key;
+function readLocal(type, scope) { try { return JSON.parse(localStorage.getItem(scopedStorageKey(storageKey(type, scope))) || 'null'); } catch { return null; } }
+function writeLocal(type, scope, value) { try { const key = scopedStorageKey(storageKey(type, scope)); if (value) localStorage.setItem(key, JSON.stringify(value)); else localStorage.removeItem(key); } catch {} }
 
 export function createVoiceStudio(bridge) {
   const $ = selector => document.querySelector(selector), dialog = $('#voice-studio'), form = $('#voice-create-form');

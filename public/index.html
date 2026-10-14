@@ -16,6 +16,17 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <section id="auth-screen" class="auth-screen" hidden>
+    <div class="auth-card">
+      <div class="auth-brand"><img src="/miraframe-logo.png" alt="" width="48" height="48"><div><strong>欢迎来到幻帧</strong><small>MiraFrame AI 创作工作台</small></div></div>
+      <p class="auth-intro">登录后继续你的创作，工程和素材只属于当前账号。</p>
+      <div class="auth-tabs" role="tablist"><button type="button" class="auth-tab active" data-auth-tab="login">登录账号</button><button type="button" class="auth-tab" data-auth-tab="register">创建账号</button></div>
+      <form id="login-form" class="auth-form"><label>邮箱地址<input name="email" type="email" autocomplete="email" placeholder="name@example.com" required></label><label>密码<input name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required></label><button class="primary full" type="submit">登录</button></form>
+      <form id="register-form" class="auth-form" hidden><label>用户名<input name="username" autocomplete="username" minlength="2" maxlength="40" placeholder="你的显示名称" required></label><label>邮箱地址<input name="email" type="email" autocomplete="email" placeholder="name@example.com" required></label><div class="auth-code-row"><label>邮箱验证码<input name="verificationCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" required></label><button class="button" id="send-code" type="button">发送验证码</button></div><label>设置密码<input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 个字符" required></label><button class="primary full" type="submit">注册并进入工作台</button></form>
+      <p id="auth-message" class="auth-message" role="status" aria-live="polite"></p>
+      <p class="auth-footnote">已注册 Pictora 的邮箱可直接使用原密码登录。</p>
+    </div>
+  </section>
   <aside class="sidebar">
     <a class="brand" href="/"><span class="brand-mark"><img src="/miraframe-logo.png" alt="" width="40" height="40"></span><span>幻帧<small>MiraFrame</small></span></a>
     <nav class="workspace-tabs" role="tablist" aria-label="创作视图" aria-orientation="vertical">
@@ -52,7 +63,7 @@
     <section id="empty-workspace" class="empty-workspace" hidden><span class="empty-project-icon">▧</span><h1>开始一个新的创作工程</h1><p>新建工程开始创作，也可以从已删除工程中恢复作品。</p><div><button id="empty-new-project" class="primary">＋ 新建工程</button><button id="empty-deleted-projects" class="button">查看已删除工程</button></div></section>
     <header class="topbar">
       <div class="workspace-heading"><span id="current-view-name">项目总览</span><span class="heading-separator">/</span><div class="project-heading"><div class="project-name-edit"><input id="project-title" aria-label="工程名称" maxlength="120" value="我的第一个创作工程" readonly><button type="button" id="rename-project" aria-label="重命名工程" title="重命名工程"><i data-lucide="pencil"></i></button></div></div></div>
-      <div class="top-actions"><span id="save-state">已保存到本机</span><div class="theme-switcher"><span>主题</span><select id="theme-select" aria-label="选择界面主题"><option value="day">白天主题</option><option value="night">夜晚主题</option></select></div></div>
+      <div class="top-actions"><span id="save-state">已保存到本机</span><button class="button" id="logout-button" type="button">退出登录</button><div class="theme-switcher"><span>主题</span><select id="theme-select" aria-label="选择界面主题"><option value="day">白天主题</option><option value="night">夜晚主题</option></select></div></div>
     </header>
 
     <section id="overview-view" class="view overview-view" role="tabpanel" aria-labelledby="overview-tab">

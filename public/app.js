@@ -19,9 +19,35 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const clone = value => structuredClone(value);
+const scopedKey = key => globalThis.__jingceUserId ? `jingce-user:${globalThis.__jingceUserId}:${key}` : key;
+let managementUi;
+function activateUser(user) { globalThis.__jingceUserId = Number(user.id); state.videoOperations = loadVideoOperations(); managementUi?.setUser(user); }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const uid = () => crypto.randomUUID();
 const uiIcon = name => globalThis.lucide?.icons?.[name] ? globalThis.lucide.createElement(globalThis.lucide.icons[name], { width: 18, height: 18, 'aria-hidden': 'true' }).outerHTML : '';
+function showWorkspace(authenticated) { $('#auth-screen').hidden = authenticated; document.querySelector('.sidebar').hidden = !authenticated; document.querySelector('.workspace').hidden = !authenticated; }
+function authMessage(message = '', error = false) { const node = $('#auth-message'); node.textContent = message; node.classList.toggle('error', error); }
+async function authRequest(url, body) { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(body) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new ApiError(data.error?.message || data.error || '认证失败。', response.status); return data; }
+function initAuth() {
+  for (const tab of $$('.auth-tab')) tab.onclick = () => { for (const item of $$('.auth-tab')) item.classList.toggle('active', item === tab); $('#login-form').hidden = tab.dataset.authTab !== 'login'; $('#register-form').hidden = tab.dataset.authTab !== 'register'; authMessage(); };
+  $('#login-form').onsubmit = async event => { event.preventDefault(); const button = event.currentTarget.querySelector('[type=submit]'); button.disabled = true; const form = new FormData(event.currentTarget); try { const result = await authRequest('/api/auth/login', Object.fromEntries(form)); activateUser(result); const bootstrap = await api('/api/bootstrap'); showWorkspace(true); await init(bootstrap); } catch (error) { authMessage(error.message, true); } finally { button.disabled = false; } };
+  $('#send-code').onclick = async () => { const form = $('#register-form'); try { await authRequest('/api/auth/verification-code', { email: form.elements.email.value }); authMessage('验证码已发送，请查收邮件。'); } catch (error) { authMessage(error.message, true); } };
+  $('#register-form').onsubmit = async event => { event.preventDefault(); const form = new FormData(event.currentTarget); try { const result = await authRequest('/api/auth/register', Object.fromEntries(form)); activateUser(result); showWorkspace(true); await init(); } catch (error) { authMessage(error.message, true); } };
+  $('#logout-button').onclick = async () => {
+    const button = $('#logout-button');
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin', cache: 'no-store' });
+      if (!response.ok) throw new Error('退出登录失败，请重试。');
+      globalThis.__jingceUserId = null;
+      showWorkspace(false);
+      location.replace('/');
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, true);
+    }
+  };
+}
 globalThis.lucide?.createIcons({ attrs: { 'aria-hidden': 'true' } });
 for (const [selector, name] of Object.entries({
   '[data-canvas-tool="select"] > span': 'MousePointer2', '[data-canvas-tool="hand"] > span': 'Hand',
@@ -37,7 +63,7 @@ const VIDEO_OPERATION_STORAGE_KEY = 'jingce-pending-video-operations';
 const TEXT_HISTORY_STORAGE_KEY = 'jingce-text-chat-history';
 function loadVideoOperations() {
   try {
-    const entries = JSON.parse(sessionStorage.getItem(VIDEO_OPERATION_STORAGE_KEY) || '[]');
+    const entries = JSON.parse(sessionStorage.getItem(scopedKey(VIDEO_OPERATION_STORAGE_KEY)) || '[]');
     return new Map(Array.isArray(entries) ? entries.filter(entry => {
       if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string') return false;
       const operationId = typeof entry[1] === 'string' ? entry[1] : entry[1]?.operationId;
@@ -47,7 +73,7 @@ function loadVideoOperations() {
 }
 function setVideoOperation(key, operationId, input) {
   if (operationId) state.videoOperations.set(key, { operationId, input }); else state.videoOperations.delete(key);
-  try { sessionStorage.setItem(VIDEO_OPERATION_STORAGE_KEY, JSON.stringify([...state.videoOperations])); } catch { /* 保留本页内的重复提交保护 */ }
+  try { sessionStorage.setItem(scopedKey(VIDEO_OPERATION_STORAGE_KEY), JSON.stringify([...state.videoOperations])); } catch { /* 保留本页内的重复提交保护 */ }
 }
 const THEME_LABELS = { day: '白天主题', night: '夜晚主题' };
 function applyTheme(theme, persist = false) {
@@ -126,12 +152,14 @@ class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
 async function api(url, method = 'GET', body) {
-  const headers = { 'X-Studio-Token': state.token };
+  const headers = {};
+  if (state.token) headers['X-Studio-Token'] = state.token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let response;
   try { response = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store' }); }
   catch { throw new ApiError('工作台连接中断。请检查启动窗口是否仍在运行。', 0); }
   const data = await response.json();
+  if (response.status === 401 && globalThis.__jingceUserId && document.body?.dataset?.authGateway === '1') { showWorkspace(false); location.replace('/'); }
   if (!response.ok) throw new ApiError(data.error || '操作未完成。', response.status);
   return data;
 }
@@ -161,13 +189,13 @@ function setProject(project) {
   state.dirty.clear(); state.saveError = null;
   state.versions = {};
   state.textMessages = project && typeof loadTextHistory === 'function' ? loadTextHistory(project.id) : [];
-  try { state.textSkillId = project ? localStorage.getItem(`jingce-text-skill:${project.id}`) || '' : ''; } catch { state.textSkillId = ''; }
+  try { state.textSkillId = project ? localStorage.getItem(scopedKey(`jingce-text-skill:${project.id}`)) || '' : ''; } catch { state.textSkillId = ''; }
   state.textRequestId = '';
   state.textError = '';
   state.textBusy = false;
   renderTextChat();
-  if (project) { rememberProject(project); localStorage.setItem('jingce-active-project', project.id); }
-  else localStorage.removeItem('jingce-active-project');
+  if (project) { rememberProject(project); localStorage.setItem(scopedKey('jingce-active-project'), project.id); }
+  else localStorage.removeItem(scopedKey('jingce-active-project'));
   $('#image-page-form')?.reset();
   if ($('#image-page-quality')) $('#image-page-quality').value = 'auto';
   state.imageReferenceIds = [];
@@ -181,14 +209,14 @@ function setProject(project) {
 function loadTextHistory(projectId) {
   if (!projectId) return [];
   try {
-    const raw = JSON.parse(localStorage.getItem(`${TEXT_HISTORY_STORAGE_KEY}:${projectId}`) || '[]');
+    const raw = JSON.parse(localStorage.getItem(scopedKey(`${TEXT_HISTORY_STORAGE_KEY}:${projectId}`)) || '[]');
     return Array.isArray(raw) ? raw.filter(item => item && ['user', 'assistant'].includes(item.role)
       && typeof item.content === 'string' && (item.content.trim() || item.images?.length)) : [];
   } catch { return []; }
 }
 function saveTextHistory(projectId = state.project?.id, messages = state.textMessages) {
   if (!projectId) return;
-  try { localStorage.setItem(`${TEXT_HISTORY_STORAGE_KEY}:${projectId}`, JSON.stringify(messages)); }
+  try { localStorage.setItem(scopedKey(`${TEXT_HISTORY_STORAGE_KEY}:${projectId}`), JSON.stringify(messages)); }
   catch { /* 对话仍保留在当前页面 */ }
 }
 
@@ -496,7 +524,7 @@ function setView(view) {
   if (state.view === 'canvas' && view !== 'canvas') { canvas.finishEditing(); canvas.setExpanded?.(false); }
   if (view !== 'results') closeResultDetails();
   state.view = view;
-  try { localStorage.setItem('jingce-active-view', view); } catch {}
+  try { localStorage.setItem(scopedKey('jingce-active-view'), view); } catch {}
   document.body.dataset.view = view;
   $('#current-view-name').textContent = { overview: '项目总览', canvas: '创作画布', assets: '素材库', images: '图片生成', videos: '视频生成', results: '生成结果', text: '创作助手', skills: '技能库', previs: 'Blender 预演', speech: '语音生成' }[view];
   $$('.view').forEach(element => element.classList.toggle('hidden', element.id !== `${view}-view`));
@@ -2038,7 +2066,7 @@ $('#check-text-connection').onclick = () => action($('#check-text-connection'), 
 $('#text-chat-model')?.addEventListener('change', renderTextChat);
 $('#text-chat-skill')?.addEventListener('change', event => {
   state.textSkillId = event.target.value;
-  try { if (state.project) localStorage.setItem(`jingce-text-skill:${state.project.id}`, state.textSkillId); } catch {}
+  try { if (state.project) localStorage.setItem(scopedKey(`jingce-text-skill:${state.project.id}`), state.textSkillId); } catch {}
   renderTextChat();
 });
 $('#text-manage-skills')?.addEventListener('click', () => setView('skills'));
@@ -2335,13 +2363,13 @@ async function poll() {
   }
   finally { state.pollBusy = false; }
 }
-async function init() {
+async function init(initialBootstrap = null) {
   try {
     initCapabilityControls();
-    const bootstrap = await api('/api/bootstrap'); Object.assign(state, bootstrap);
+    const bootstrap = initialBootstrap || await api('/api/bootstrap'); Object.assign(state, bootstrap);
     await skillLibrary.refresh();
-    try { state.view = localStorage.getItem('jingce-active-view') || 'overview'; } catch {}
-    let project = state.projects.find(project => project.id === localStorage.getItem('jingce-active-project')) || state.projects[0];
+    try { state.view = localStorage.getItem(scopedKey('jingce-active-view')) || 'overview'; } catch {}
+    let project = state.projects.find(project => project.id === localStorage.getItem(scopedKey('jingce-active-project'))) || state.projects[0];
     setProject(project || null); await refreshJobs(); await refreshImageJobs(); setInterval(poll, 5000);
     setInterval(syncVideoCatalog, state.catalogSyncIntervalMs || 60000);
     document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncVideoCatalog();});
@@ -2565,4 +2593,5 @@ for(const selector of ['#center-refresh-models','#refresh-models','#refresh-imag
 }
 const imageCapabilityButton=document.createElement('button');imageCapabilityButton.type='button';imageCapabilityButton.className='text-button';imageCapabilityButton.dataset.modelCapability='image';imageCapabilityButton.textContent='查看 / 补充模型能力';$('#image-page-note').after(imageCapabilityButton);
 }
-init();
+async function bootAuth() { initAuth(); showWorkspace(false); try { managementUi = (await import('./management.js')).initManagement(); const response = await fetch('/api/auth/me', { cache: 'no-store', credentials: 'same-origin' }); if (response.status === 401) return; if (!response.ok) throw new Error('认证状态检查失败。'); activateUser(await response.json()); const bootstrap = await api('/api/bootstrap'); showWorkspace(true); await init(bootstrap); } catch (error) { authMessage(error.message, true); } }
+if (document.body?.dataset?.authGateway === '1') bootAuth(); else init();
